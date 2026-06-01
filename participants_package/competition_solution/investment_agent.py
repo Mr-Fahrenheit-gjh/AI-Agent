@@ -308,46 +308,68 @@ class InvestmentAgent:
             unrealized = price / position.avg_cost - 1.0
 
         value_gap = _clip((belief.fair_value / price - 1.0) * 8.0, -1.0, 1.0)
-        # 🔧 MODIFIABLE: 决策意图的权重公式
-        # 调整 belief.score / value_gap / risk_appetite 的相对权重
-        raw_intention = (
-            0.55 * belief.score
-            + 0.25 * value_gap
-            + 0.20 * self.traits["risk_appetite"]
-            - 0.14
+        market_return = self._recent_return(symbol)
+        evidence_score = _clip(
+            0.45 * belief.sentiment
+            + 0.35 * belief.social_pressure
+            + 0.35 * belief.momentum
+            + 0.15 * value_gap
+            + 0.20 * market_return,
+            -1.0,
+            1.0,
         )
 
-        # 🔧 MODIFIABLE: 处置效应偏差 — 模拟真实投资者的止盈/惜售行为
-        disposition_bias = self.traits["disposition"]
-        if position and unrealized > 0:
-            raw_intention -= disposition_bias * min(unrealized * 4.0, 0.6)
-        elif position and unrealized < 0:
-            raw_intention += disposition_bias * self.traits["loss_aversion"] * min(abs(unrealized) * 3.0, 0.5)
+        action = "hold"
+        quantity = 0
+        limit_price = price
+        score = _clip(evidence_score, -1.0, 1.0)
 
-        # 🔧 MODIFIABLE: 噪声水平 — 控制决策随机性
-        noise = self._rng.gauss(0.0, 0.05 + 0.07 * self.traits["turnover"])
-        score = raw_intention + noise
+        has_position = bool(position and position.quantity > 0)
+        strong_profit = has_position and unrealized >= 0.18
+        modest_profit = has_position and unrealized >= 0.05
+        meaningful_loss = has_position and unrealized <= -0.05
 
-        # 🔧 MODIFIABLE: 买卖阈值 — 调低阈值 = 更激进交易，调高 = 更保守
-        buy_threshold = 0.18 - 0.10 * self.traits["risk_appetite"]
-        sell_threshold = -0.22 + 0.08 * self.traits["loss_aversion"]
-
-        if score > buy_threshold:
-            action = "buy"
-            budget = self.cash * min(0.28, 0.05 + 0.25 * abs(score))
-            quantity = _lot_size(budget / price)
-            limit_price = price * (1.0 + 0.004 + 0.012 * self.traits["risk_appetite"])
-        elif score < sell_threshold and position and position.quantity > 0:
+        # BDI decision table: evidence creates belief, while P/L shapes retail intent.
+        if not has_position:
+            if evidence_score >= 0.20:
+                action = "buy"
+                score = max(0.35, evidence_score)
+            else:
+                action = "hold"
+                score = 0.0
+        elif strong_profit and evidence_score <= 0.55:
             action = "sell"
-            sell_ratio = min(1.0, 0.20 + 0.75 * abs(score))
-            quantity = _lot_size(position.quantity * sell_ratio)
-            if quantity <= 0:
-                quantity = _lot_size(position.quantity)
-            limit_price = price * (1.0 - 0.004 - 0.010 * self.traits["loss_aversion"] / 2.0)
+            score = min(-0.35, evidence_score - 0.45)
+        elif modest_profit and evidence_score < -0.05:
+            action = "sell"
+            score = min(-0.30, evidence_score)
+        elif meaningful_loss:
+            if evidence_score <= -0.65:
+                action = "sell"
+                score = min(-0.65, evidence_score)
+            else:
+                action = "hold"
+                score = 0.0
+        elif evidence_score >= 0.35:
+            action = "buy"
+            score = max(0.35, evidence_score)
+        elif evidence_score <= -0.35:
+            action = "sell"
+            score = min(-0.35, evidence_score)
         else:
             action = "hold"
-            quantity = 0
-            limit_price = price
+            score = 0.0
+
+        if action == "buy":
+            equity = max(self.cash + (position.quantity * price if position else 0.0), 1.0)
+            budget = min(self.cash, equity * 0.12)
+            quantity = _lot_size(budget / max(price, 1e-9))
+            limit_price = price * (1.0 + 0.006)
+        elif action == "sell" and position:
+            target_qty = _lot_size((self.cash + position.quantity * price) * 0.10 / max(price, 1e-9))
+            quantity = min(position.quantity, max(100, target_qty))
+            quantity = _lot_size(quantity)
+            limit_price = price * (1.0 - 0.006)
 
         if action == "buy" and quantity * limit_price > self.cash:
             quantity = _lot_size(self.cash / max(limit_price, 1e-9))
@@ -356,8 +378,10 @@ class InvestmentAgent:
         if quantity <= 0:
             action = "hold"
             quantity = 0
+            score = 0.0
+            limit_price = price
 
-        sentiment_class = 1 if score > 0.08 else -1 if score < -0.08 else 0
+        sentiment_class = 1 if action == "buy" else -1 if action == "sell" else 0
 
         # 🚀 ADVANCED: 取消下面的注释以启用 LLM 生成决策（替换规则式决策）
         # 使用前需要先设置 self.llm_client（通过构造函数或直接赋值）
@@ -382,6 +406,14 @@ class InvestmentAgent:
     def current_price(self, symbol: str) -> float:
         rows = self._market.get(symbol, [])
         return float(rows[-1]["close"]) if rows else 0.0
+
+    def _recent_return(self, symbol: str) -> float:
+        rows = self._market.get(symbol, [])
+        closes = [row["close"] for row in rows if row["close"] > 0]
+        if len(closes) < 2:
+            return 0.0
+        lookback = closes[-6] if len(closes) >= 6 else closes[0]
+        return _clip((closes[-1] / lookback - 1.0) * 4.0, -1.0, 1.0) if lookback > 0 else 0.0
 
     def apply_fill(self, symbol: str, side: str, price: float, quantity: int) -> None:
         if quantity <= 0:
@@ -553,15 +585,21 @@ class InvestmentAgent:
     def _build_thought(
         self, symbol: str, belief: Belief, action: str, unrealized: float, value_gap: float
     ) -> str:
+        direction = "bullish" if action == "buy" else "bearish or profit-taking" if action == "sell" else "mixed"
         parts = [
-            f"{symbol} belief is {'positive' if belief.score > 0 else 'negative' if belief.score < 0 else 'mixed'}",
+            f"{symbol} evidence feels {direction}",
             f"momentum {belief.momentum:.2f}",
+            f"news sentiment {belief.sentiment:.2f}",
             f"social pressure {belief.social_pressure:.2f}",
         ]
-        if unrealized > 0:
-            parts.append(f"I am tempted to lock in a {unrealized:.1%} gain")
-        elif unrealized < 0:
-            parts.append(f"I dislike realizing a {abs(unrealized):.1%} loss")
+        if action == "sell" and unrealized > 0:
+            parts.append(f"my unrealized gain is {unrealized:.1%}, so I want to lock in part of it")
+        elif action == "hold" and unrealized < 0:
+            parts.append(f"my position is down {abs(unrealized):.1%}, and I dislike realizing the loss without stronger evidence")
+        elif action == "hold":
+            parts.append("the signal is not strong enough to justify trading")
+        elif action == "buy":
+            parts.append("the positive evidence and available cash make participation attractive")
         if abs(value_gap) > 0.15:
             parts.append("price is away from my value anchor")
         parts.append(f"therefore I choose {action}")

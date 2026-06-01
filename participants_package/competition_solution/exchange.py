@@ -204,12 +204,21 @@ class RegulatoryAgent:
         self.cancelled: List[Dict[str, Any]] = []
         self.alerts: List[Alert] = []
         self.entity_trades: Deque[Trade] = deque(maxlen=2_000)
+        self.symbol_trade_windows: Dict[str, Deque[Dict[str, Any]]] = defaultdict(lambda: deque(maxlen=200))
+        self.pump_alerted_symbols: Dict[str, int] = {}
 
     def pre_submit(self, order: Order, book: LimitOrderBook) -> Optional[Alert]:
         wash_alert = self._same_entity_cross_alert(order, book)
         if wash_alert:
             self.alerts.append(wash_alert)
             return wash_alert
+
+        spoof_alert = self._large_far_order_alert(order, book)
+        if spoof_alert:
+            self.alerts.append(spoof_alert)
+            self.open_orders[order.order_id] = order
+            self.events.append({"type": "submit", "timestamp": order.timestamp, "order": order})
+            return spoof_alert
 
         self.open_orders[order.order_id] = order
         self.events.append({"type": "submit", "timestamp": order.timestamp, "order": order})
@@ -239,6 +248,42 @@ class RegulatoryAgent:
                         "same beneficial owner, so the exchange blocks it before execution."
                     ),
                 )
+        return None
+
+    def _large_far_order_alert(self, order: Order, book: LimitOrderBook) -> Optional[Alert]:
+        bid, ask = book.best_bid_ask()
+        same_side_depth = _average_depth(book.depth(order.side, levels=5))
+        opposite_side = "sell" if order.side == "buy" else "buy"
+        opposite_depth = _average_depth(book.depth(opposite_side, levels=5))
+        reference_depth = max(same_side_depth, opposite_depth, 1.0)
+        is_large = order.quantity >= reference_depth * self.large_order_ratio
+
+        far_from_touch = False
+        if order.side == "buy" and ask is not None:
+            far_from_touch = order.price < ask * 0.92
+        elif order.side == "sell" and bid is not None:
+            far_from_touch = order.price > bid * 1.08
+
+        crosses = (
+            order.side == "buy" and ask is not None and order.price >= ask
+        ) or (
+            order.side == "sell" and bid is not None and order.price <= bid
+        )
+        if is_large and far_from_touch and not crosses:
+            return Alert(
+                timestamp=order.timestamp,
+                alert_type="spoofing",
+                severity=0.78,
+                order_id=order.order_id,
+                entity_id=order.entity_id or order.agent_id,
+                symbol=order.symbol,
+                action="monitor_or_throttle",
+                thought=(
+                    "Entity submitted an oversized order far from the touch that materially "
+                    "changes displayed depth without a plausible execution path, which is "
+                    "consistent with spoofing or layering intent."
+                ),
+            )
         return None
 
     def on_cancel(self, order: Order, timestamp: int, book: LimitOrderBook) -> Optional[Alert]:
@@ -280,6 +325,7 @@ class RegulatoryAgent:
             seller = orders.get(trade.sell_order_id)
             buyer_entity = buyer.entity_id if buyer else trade.buyer_id
             seller_entity = seller.entity_id if seller else trade.seller_id
+            self._record_trade_window(trade, str(buyer_entity), str(seller_entity))
             if buyer_entity == seller_entity:
                 alert = Alert(
                     timestamp=trade.timestamp,
@@ -321,7 +367,76 @@ class RegulatoryAgent:
                 self.alerts.append(alert)
                 alerts.append(alert)
 
+            pump_alert = self._pump_dump_alert(trade.symbol, trade.timestamp)
+            if pump_alert:
+                self.alerts.append(pump_alert)
+                alerts.append(pump_alert)
+
         return alerts
+
+    def _record_trade_window(self, trade: Trade, buyer_entity: str, seller_entity: str) -> None:
+        self.symbol_trade_windows[trade.symbol].append(
+            {
+                "timestamp": trade.timestamp,
+                "price": trade.price,
+                "quantity": trade.quantity,
+                "buyer_entity": buyer_entity,
+                "seller_entity": seller_entity,
+            }
+        )
+
+    def _pump_dump_alert(self, symbol: str, timestamp: int) -> Optional[Alert]:
+        last_alert = self.pump_alerted_symbols.get(symbol)
+        if last_alert is not None and timestamp - last_alert <= self.pump_window:
+            return None
+
+        recent = [
+            item
+            for item in self.symbol_trade_windows[symbol]
+            if item["timestamp"] >= timestamp - self.pump_window
+        ]
+        if len(recent) < 4:
+            return None
+
+        first_price = float(recent[0]["price"])
+        last_price = float(recent[-1]["price"])
+        if first_price <= 0:
+            return None
+        return_window = last_price / first_price - 1.0
+        total_qty = sum(int(item["quantity"]) for item in recent)
+        if total_qty <= 0:
+            return None
+
+        seller_volume: Dict[str, int] = defaultdict(int)
+        buyer_volume: Dict[str, int] = defaultdict(int)
+        for item in recent:
+            seller_volume[str(item["seller_entity"])] += int(item["quantity"])
+            buyer_volume[str(item["buyer_entity"])] += int(item["quantity"])
+
+        top_seller, top_seller_qty = max(seller_volume.items(), key=lambda pair: pair[1])
+        seller_concentration = top_seller_qty / total_qty
+        distinct_buyers = len(buyer_volume)
+        mostly_rising = sum(
+            1 for left, right in zip(recent, recent[1:]) if float(right["price"]) >= float(left["price"])
+        ) >= len(recent) - 2
+
+        if return_window >= 0.025 and seller_concentration >= 0.45 and distinct_buyers >= 3 and mostly_rising:
+            self.pump_alerted_symbols[symbol] = timestamp
+            return Alert(
+                timestamp=timestamp,
+                alert_type="pump_and_dump",
+                severity=0.88,
+                order_id=None,
+                entity_id=top_seller,
+                symbol=symbol,
+                action="warn_and_sample_for_review",
+                thought=(
+                    "The symbol shows abnormal short-window price expansion while one entity "
+                    "repeatedly sells into multiple aggressive buyers. This concentrated "
+                    "sell-into-rising-prices pattern is consistent with pump-and-dump manipulation."
+                ),
+            )
+        return None
 
 
 class ExchangeAgent:
@@ -359,6 +474,7 @@ class ExchangeAgent:
         alert = self.regulator.pre_submit(order, book)
         if alert and (alert.action == "quarantine" or alert.action.startswith("block_")):
             return {"accepted": False, "order_id": order.order_id, "trades": [], "alerts": [alert.as_dict()]}
+        pre_alerts = [alert.as_dict()] if alert else []
 
         self.order_snapshots[order.order_id] = Order(
             order_id=order.order_id,
@@ -376,7 +492,7 @@ class ExchangeAgent:
             "accepted": True,
             "order_id": order.order_id,
             "trades": [trade.as_dict() for trade in trades],
-            "alerts": [item.as_dict() for item in alerts],
+            "alerts": pre_alerts + [item.as_dict() for item in alerts],
         }
 
     def cancel_order(self, symbol: str, order_id: str, timestamp: int) -> Dict[str, Any]:
