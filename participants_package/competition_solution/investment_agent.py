@@ -361,8 +361,8 @@ class InvestmentAgent:
 
         # 🚀 ADVANCED: 取消下面的注释以启用 LLM 生成决策（替换规则式决策）
         # 使用前需要先设置 self.llm_client（通过构造函数或直接赋值）
-        # if self.llm_client is not None:
-        #     return self._llm_decide(symbol)
+        if self.llm_client is not None:
+            return self._llm_decide(symbol)
 
         thought = self._build_thought(symbol, belief, action, unrealized, value_gap)
         decision = Decision(
