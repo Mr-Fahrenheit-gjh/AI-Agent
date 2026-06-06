@@ -123,6 +123,16 @@ def build_market_features(klines: Iterable[Any]) -> Dict[str, float]:
         Meaning: most recent price shock.
         Code parameter: ``RECENT_RETURN_FULL_SIGNAL``.
 
+    ``open_price``, ``high_price``, ``low_price``, ``close_price``,
+    ``volume_raw``:
+        Formula: latest raw OHLCV row values.
+        Meaning: keep the most recent market snapshot available for LLM prompts
+        and debugging; higher-level indicators do not replace raw OHLCV.
+
+    ``window_high``, ``window_low``, ``avg_volume``:
+        Formula: recent anchor-window high/low and attention-window average
+        volume. Meaning: expose the raw anchors used by derived features.
+
     ``current_price`` and ``kline_count``:
         Latest close and number of usable rows.
     """
@@ -143,8 +153,15 @@ def build_market_features(klines: Iterable[Any]) -> Dict[str, float]:
         return neutral
 
     current_price = valid_closes[-1]
+    latest_row = rows[-1]
+    open_price = _row_value(latest_row, "open", current_price)
+    high_price = _row_value(latest_row, "high", current_price)
+    low_price = _row_value(latest_row, "low", current_price)
+    close_price = _row_value(latest_row, "close", current_price)
+    volume_raw = _row_value(latest_row, "volume", 0.0)
 
     attention_multiplier = 1.0
+    avg_volume = 0.0
     if len(volumes) >= 2:
         past_volumes = [value for value in volumes[-(ATTENTION_WINDOW + 1) : -1] if value > 0]
         avg_volume = _mean(past_volumes)
@@ -158,10 +175,12 @@ def build_market_features(klines: Iterable[Any]) -> Dict[str, float]:
 
     anchor_highs = [value for value in highs[-ANCHOR_WINDOW:] if value > 0]
     anchor_lows = [value for value in lows[-ANCHOR_WINDOW:] if value > 0]
+    window_high = 0.0
+    window_low = 0.0
     if anchor_highs and anchor_lows:
-        high_w = max(anchor_highs)
-        low_w = min(anchor_lows)
-        anchor_position = _clip(_safe_div(current_price - low_w, high_w - low_w + EPS), 0.0, 1.0)
+        window_high = max(anchor_highs)
+        window_low = min(anchor_lows)
+        anchor_position = _clip(_safe_div(current_price - window_low, window_high - window_low + EPS), 0.0, 1.0)
     else:
         anchor_position = 0.5
     anchor_score = _clip(1.0 - 2.0 * anchor_position, -1.0, 1.0)
@@ -198,6 +217,14 @@ def build_market_features(klines: Iterable[Any]) -> Dict[str, float]:
         recent_return_score = _safe_div(recent_return_score, RECENT_RETURN_FULL_SIGNAL, default=0.0)
 
     return {
+        "open_price": float(open_price),
+        "high_price": float(high_price),
+        "low_price": float(low_price),
+        "close_price": float(close_price),
+        "volume_raw": float(volume_raw),
+        "window_high": float(window_high),
+        "window_low": float(window_low),
+        "avg_volume": float(avg_volume),
         "attention_multiplier": float(attention_multiplier),
         "attention_score": float(attention_score),
         "anchor_position": float(anchor_position),
@@ -368,6 +395,14 @@ def build_observation_features(
 
 def _neutral_market_features(count: int = 0) -> Dict[str, float]:
     return {
+        "open_price": 0.0,
+        "high_price": 0.0,
+        "low_price": 0.0,
+        "close_price": 0.0,
+        "volume_raw": 0.0,
+        "window_high": 0.0,
+        "window_low": 0.0,
+        "avg_volume": 0.0,
         "attention_multiplier": 1.0,
         "attention_score": 0.0,
         "anchor_position": 0.5,

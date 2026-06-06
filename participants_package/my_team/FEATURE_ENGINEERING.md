@@ -36,6 +36,56 @@ dict 格式 K 线
 
 如果 K 线数量不足，所有特征都会使用短历史 fallback，不会中断评测。
 
+### 0. 最新 OHLCV 快照
+
+代码位置：
+
+```python
+build_market_features()
+```
+
+输出字段：
+
+```text
+open_price
+high_price
+low_price
+close_price
+volume_raw
+window_high
+window_low
+avg_volume
+```
+
+构造方式：
+
+```text
+open_price = 最新一根 K 线 open
+high_price = 最新一根 K 线 high
+low_price = 最新一根 K 线 low
+close_price = 最新一根 K 线 close
+volume_raw = 最新一根 K 线 volume
+window_high = 最近 ANCHOR_WINDOW 内最高价
+window_low = 最近 ANCHOR_WINDOW 内最低价
+avg_volume = 最近 ATTENTION_WINDOW 历史成交量均值，不含当前 K 线
+```
+
+意义：
+
+```text
+保留原始行情快照，避免后续 LLM 或规则层只能看到加工后的指标。
+window_high/window_low/avg_volume 也用于解释 anchor_score 与 attention_score 的来源。
+```
+
+可调参数：
+
+```python
+ANCHOR_WINDOW = 30
+ATTENTION_WINDOW = 20
+```
+
+---
+
 ### 1. 关注度乘数 `attention_multiplier`
 
 代码位置：
@@ -1122,4 +1172,3 @@ account_features = build_account_features(
     avg_cost_by_symbol=avg_cost_by_symbol,
 )
 ```
-
