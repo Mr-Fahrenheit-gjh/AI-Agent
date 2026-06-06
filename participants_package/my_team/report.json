@@ -1,0 +1,138 @@
+{
+  "submission_dir": "D:\\AI-agent\\AI-Agent\\participants_package\\my_team",
+  "interface_smoke": {
+    "status": "ok"
+  },
+  "task1": {
+    "score": 35.8,
+    "component_scores": {
+      "format": 100.0,
+      "disposition_effect": 0.0,
+      "belief_correlation": 0.0,
+      "turnover_similarity": 78.8
+    },
+    "checks": {
+      "returns_agent_decision": "6/6",
+      "action_valid": "6/6",
+      "thought_present": "6/6",
+      "belief_in_range": "6/6",
+      "sentiment_valid": "6/6",
+      "limit_price_positive": "6/6",
+      "quantity_non_negative": "6/6",
+      "sell_not_over_position": "6/6",
+      "buy_not_far_over_cash": "6/6"
+    },
+    "metrics": {
+      "DE": 0.0,
+      "PGR": 0.0,
+      "PLR": 0.0,
+      "belief_action_spearman": 0.0,
+      "turnover_wasserstein": 0.095,
+      "avg_turnover": 0.0
+    },
+    "decisions": [
+      {
+        "agent_id": "A_gain_bull",
+        "action": "hold",
+        "quantity": 0,
+        "limit_price": 113.2544,
+        "belief_score": 0.2323,
+        "sentiment_class": 1,
+        "thought": "SIM belief is positive; momentum 0.19; social pressure 0.54; I am tempted to lock in a 16.7% gain; therefore I choose hold."
+      },
+      {
+        "agent_id": "A_loss_bear",
+        "action": "hold",
+        "quantity": 0,
+        "limit_price": 92.0,
+        "belief_score": -0.1117,
+        "sentiment_class": -1,
+        "thought": "SIM belief is negative; momentum -0.33; social pressure -0.45; I dislike realizing a 14.8% loss; therefore I choose hold."
+      },
+      {
+        "agent_id": "A_cash_bull",
+        "action": "hold",
+        "quantity": 0,
+        "limit_price": 109.0,
+        "belief_score": 0.085,
+        "sentiment_class": 1,
+        "thought": "SIM belief is positive; momentum 0.22; social pressure 0.00; therefore I choose hold."
+      },
+      {
+        "agent_id": "A_cash_bear",
+        "action": "hold",
+        "quantity": 0,
+        "limit_price": 94.0,
+        "belief_score": -0.2369,
+        "sentiment_class": -1,
+        "thought": "SIM belief is negative; momentum -0.21; social pressure -0.30; therefore I choose hold."
+      },
+      {
+        "agent_id": "A_neutral",
+        "action": "hold",
+        "quantity": 0,
+        "limit_price": 100.0,
+        "belief_score": -0.0557,
+        "sentiment_class": 0,
+        "thought": "SIM belief is negative; momentum -0.00; social pressure 0.00; therefore I choose hold."
+      },
+      {
+        "agent_id": "A_gain_pressure",
+        "action": "hold",
+        "quantity": 0,
+        "limit_price": 118.0,
+        "belief_score": 0.0183,
+        "sentiment_class": 0,
+        "thought": "SIM belief is positive; momentum 0.28; social pressure 0.30; I am tempted to lock in a 29.7% gain; therefore I choose hold."
+      }
+    ]
+  },
+  "task2": {
+    "score": 100.0,
+    "component_scores": {
+      "price_time_priority": 100.0,
+      "surveillance": 100.0,
+      "f1": 100.0,
+      "response_latency": 100.0
+    },
+    "metrics": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "latency_scores": {
+        "wash": 1.0,
+        "spoof": 1.0,
+        "pump": 1.0
+      }
+    },
+    "scenarios": {
+      "price_time": {
+        "checks": {
+          "two_trades": true,
+          "first_seller_priority": true,
+          "second_seller_priority": true,
+          "partial_fill_quantity": true,
+          "no_false_alert": true
+        },
+        "trade_count": 2,
+        "alert_count": 0
+      },
+      "wash_trading": {
+        "detected": true,
+        "latency": 0,
+        "alert_count": 1
+      },
+      "spoofing": {
+        "detected": true,
+        "latency": 0,
+        "alert_count": 1
+      },
+      "pump_and_dump": {
+        "detected": true,
+        "latency": 0,
+        "alert_count": 1
+      }
+    }
+  },
+  "overall_score": 67.9
+}

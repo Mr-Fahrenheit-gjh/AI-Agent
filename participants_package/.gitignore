@@ -44,3 +44,6 @@ team_*/
 # --- 大型二进制数据 ---
 # klines_dict.pkl 可能很大（>100MB），不要提交
 data/klines_dict.pkl
+
+.claude
+CLAUDE.md
