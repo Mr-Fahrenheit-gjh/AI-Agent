@@ -13,9 +13,13 @@ from typing import Any, Dict, List, Mapping, Optional
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
+PARENT_DIR = CURRENT_DIR.parent
+if str(PARENT_DIR) not in sys.path:
+    sys.path.insert(0, str(PARENT_DIR))
 
 from exchange import ExchangeAgent  # noqa: E402
 from investment_agent import InvestmentAgent, Position  # noqa: E402
+from llm_helper import create_llm_client  # noqa: E402
 from submission_interface.api import (  # noqa: E402
     AgentDecision,
     AlertRecord,
@@ -33,12 +37,20 @@ class TeamSubmission(CompetitionSubmission):
         self.agents: Dict[str, InvestmentAgent] = {}
         self.exchange = ExchangeAgent()
         self.seed = 0
+        self.llm_client = None
 
     def reset(self, seed: int = 0, config: Optional[Mapping[str, Any]] = None) -> None:
         self.config.update(dict(config or {}))
         self.agents = {}
         self.exchange = ExchangeAgent()
         self.seed = seed
+        self.llm_client = None
+        if self.config.get("use_llm"):
+            config_path = str(self.config.get("llm_config_path", "config.yaml"))
+            try:
+                self.llm_client = create_llm_client(config_path)
+            except Exception:
+                self.llm_client = None
 
     def decide(self, observation: MarketObservation) -> AgentDecision:
         agent = self.agents.get(observation.agent_id)
@@ -48,6 +60,9 @@ class TeamSubmission(CompetitionSubmission):
                 agent_id=observation.agent_id,
                 personality=personality,
                 cash=observation.cash,
+                llm_client=self.llm_client,
+                llm_desire_enabled=bool(self.config.get("llm_desire_enabled", False)),
+                llm_thought_enabled=bool(self.config.get("llm_thought_enabled", False)),
                 seed=self.seed + len(self.agents),
             )
             self.agents[observation.agent_id] = agent

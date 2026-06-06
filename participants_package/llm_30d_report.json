@@ -1,0 +1,361 @@
+{
+  "submission_dir": "C:\\Users\\79967\\Downloads\\AI Agent比赛\\AI-Agent\\participants_package\\my_team",
+  "interface_smoke": {
+    "status": "ok"
+  },
+  "task1": {
+    "score": 27.1,
+    "legacy_score": 35.8,
+    "component_scores": {
+      "format": 100.0,
+      "disposition_effect": 0.0,
+      "belief_correlation": 0.0,
+      "turnover_similarity": 78.8
+    },
+    "strict_component_scores": {
+      "format": 100.0,
+      "disposition_effect": 0.0,
+      "belief_correlation": 0.0,
+      "turnover_similarity": 78.8,
+      "cross_symbol_stability": 26.3,
+      "action_diversity": 0.0
+    },
+    "strict_penalties": {
+      "too_many_holds": 35.0,
+      "too_few_buys": 25.0,
+      "too_few_sells": 25.0,
+      "too_few_active_symbols": 25.0
+    },
+    "checks": {
+      "returns_agent_decision": "110/110",
+      "action_valid": "110/110",
+      "thought_present": "110/110",
+      "belief_in_range": "110/110",
+      "sentiment_valid": "110/110",
+      "limit_price_positive": "110/110",
+      "quantity_non_negative": "110/110",
+      "sell_not_over_position": "110/110",
+      "buy_not_far_over_cash": "110/110"
+    },
+    "metrics": {
+      "DE": 0.0,
+      "PGR": 0.0,
+      "PLR": 0.0,
+      "belief_action_spearman": 0.0,
+      "turnover_wasserstein": 0.095,
+      "avg_turnover": 0.0
+    },
+    "data": {
+      "data_dir": "C:\\Users\\79967\\Downloads\\AI Agent比赛\\AI-Agent\\participants_package\\new_data\\market_60d_package\\data",
+      "train_start": "第1天",
+      "train_end": "第30天",
+      "train_days": 30,
+      "symbols": 10,
+      "observations": 110,
+      "trades": 0
+    },
+    "action_counts": {
+      "buy": 0,
+      "sell": 0,
+      "hold": 110
+    },
+    "symbol_counts": {
+      "STOCK_001": 11,
+      "STOCK_002": 11,
+      "STOCK_003": 11,
+      "STOCK_004": 11,
+      "STOCK_005": 11,
+      "STOCK_006": 11,
+      "STOCK_007": 11,
+      "STOCK_008": 11,
+      "STOCK_009": 11,
+      "STOCK_010": 11
+    },
+    "symbol_metrics": {
+      "STOCK_001": {
+        "DE": 0.0,
+        "rho": 0.0,
+        "turnover_WD": 0.095,
+        "de_score": 0.0,
+        "rho_score": 0.0,
+        "turnover_score": 78.8,
+        "actions": {
+          "buy": 0,
+          "sell": 0,
+          "hold": 11
+        }
+      },
+      "STOCK_002": {
+        "DE": 0.0,
+        "rho": 0.0,
+        "turnover_WD": 0.095,
+        "de_score": 0.0,
+        "rho_score": 0.0,
+        "turnover_score": 78.8,
+        "actions": {
+          "buy": 0,
+          "sell": 0,
+          "hold": 11
+        }
+      },
+      "STOCK_003": {
+        "DE": 0.0,
+        "rho": 0.0,
+        "turnover_WD": 0.095,
+        "de_score": 0.0,
+        "rho_score": 0.0,
+        "turnover_score": 78.8,
+        "actions": {
+          "buy": 0,
+          "sell": 0,
+          "hold": 11
+        }
+      },
+      "STOCK_004": {
+        "DE": 0.0,
+        "rho": 0.0,
+        "turnover_WD": 0.095,
+        "de_score": 0.0,
+        "rho_score": 0.0,
+        "turnover_score": 78.8,
+        "actions": {
+          "buy": 0,
+          "sell": 0,
+          "hold": 11
+        }
+      },
+      "STOCK_005": {
+        "DE": 0.0,
+        "rho": 0.0,
+        "turnover_WD": 0.095,
+        "de_score": 0.0,
+        "rho_score": 0.0,
+        "turnover_score": 78.8,
+        "actions": {
+          "buy": 0,
+          "sell": 0,
+          "hold": 11
+        }
+      },
+      "STOCK_006": {
+        "DE": 0.0,
+        "rho": 0.0,
+        "turnover_WD": 0.095,
+        "de_score": 0.0,
+        "rho_score": 0.0,
+        "turnover_score": 78.8,
+        "actions": {
+          "buy": 0,
+          "sell": 0,
+          "hold": 11
+        }
+      },
+      "STOCK_007": {
+        "DE": 0.0,
+        "rho": 0.0,
+        "turnover_WD": 0.095,
+        "de_score": 0.0,
+        "rho_score": 0.0,
+        "turnover_score": 78.8,
+        "actions": {
+          "buy": 0,
+          "sell": 0,
+          "hold": 11
+        }
+      },
+      "STOCK_008": {
+        "DE": 0.0,
+        "rho": 0.0,
+        "turnover_WD": 0.095,
+        "de_score": 0.0,
+        "rho_score": 0.0,
+        "turnover_score": 78.8,
+        "actions": {
+          "buy": 0,
+          "sell": 0,
+          "hold": 11
+        }
+      },
+      "STOCK_009": {
+        "DE": 0.0,
+        "rho": 0.0,
+        "turnover_WD": 0.095,
+        "de_score": 0.0,
+        "rho_score": 0.0,
+        "turnover_score": 78.8,
+        "actions": {
+          "buy": 0,
+          "sell": 0,
+          "hold": 11
+        }
+      },
+      "STOCK_010": {
+        "DE": 0.0,
+        "rho": 0.0,
+        "turnover_WD": 0.095,
+        "de_score": 0.0,
+        "rho_score": 0.0,
+        "turnover_score": 78.8,
+        "actions": {
+          "buy": 0,
+          "sell": 0,
+          "hold": 11
+        }
+      }
+    },
+    "examples": [
+      {
+        "day": "第20天",
+        "symbol": "STOCK_001",
+        "stock_name": "匿名标的001",
+        "position": 0,
+        "avg_cost": 0.0,
+        "news_count": 1,
+        "action": "hold",
+        "quantity": 0,
+        "belief_score": 0.0,
+        "sentiment_class": 0,
+        "thought": "The fallback cognition uses news, social sentiment, and technical features because the LLM belief response was empty. I do not see a strong personality-based reason to alter the rule desires. So I choose to stay patient."
+      },
+      {
+        "day": "第20天",
+        "symbol": "STOCK_002",
+        "stock_name": "匿名标的002",
+        "position": 0,
+        "avg_cost": 0.0,
+        "news_count": 1,
+        "action": "hold",
+        "quantity": 0,
+        "belief_score": 0.0,
+        "sentiment_class": 0,
+        "thought": "The fallback cognition uses news, social sentiment, and technical features because the LLM belief response was empty. I do not see a strong personality-based reason to alter the rule desires. So I choose to stay patient."
+      },
+      {
+        "day": "第20天",
+        "symbol": "STOCK_003",
+        "stock_name": "匿名标的003",
+        "position": 0,
+        "avg_cost": 0.0,
+        "news_count": 1,
+        "action": "hold",
+        "quantity": 0,
+        "belief_score": 0.0,
+        "sentiment_class": 0,
+        "thought": "The fallback cognition uses news, social sentiment, and technical features because the LLM belief response was empty. I do not see a strong personality-based reason to alter the rule desires. So I choose to stay patient. The price also feels stretched."
+      },
+      {
+        "day": "第20天",
+        "symbol": "STOCK_004",
+        "stock_name": "匿名标的004",
+        "position": 0,
+        "avg_cost": 0.0,
+        "news_count": 1,
+        "action": "hold",
+        "quantity": 0,
+        "belief_score": 0.0,
+        "sentiment_class": 0,
+        "thought": "The fallback cognition uses news, social sentiment, and technical features because the LLM belief response was empty. I do not see a strong personality-based reason to alter the rule desires. So I choose to stay patient. The price also feels stretched."
+      },
+      {
+        "day": "第20天",
+        "symbol": "STOCK_005",
+        "stock_name": "匿名标的005",
+        "position": 0,
+        "avg_cost": 0.0,
+        "news_count": 1,
+        "action": "hold",
+        "quantity": 0,
+        "belief_score": 0.0,
+        "sentiment_class": 0,
+        "thought": "The fallback cognition uses news, social sentiment, and technical features because the LLM belief response was empty. I do not see a strong personality-based reason to alter the rule desires. So I choose to stay patient."
+      },
+      {
+        "day": "第20天",
+        "symbol": "STOCK_006",
+        "stock_name": "匿名标的006",
+        "position": 0,
+        "avg_cost": 0.0,
+        "news_count": 1,
+        "action": "hold",
+        "quantity": 0,
+        "belief_score": 0.0,
+        "sentiment_class": 0,
+        "thought": "The fallback cognition uses news, social sentiment, and technical features because the LLM belief response was empty. I do not see a strong personality-based reason to alter the rule desires. So I choose to stay patient. The price also feels stretched."
+      },
+      {
+        "day": "第20天",
+        "symbol": "STOCK_007",
+        "stock_name": "匿名标的007",
+        "position": 0,
+        "avg_cost": 0.0,
+        "news_count": 1,
+        "action": "hold",
+        "quantity": 0,
+        "belief_score": 0.0,
+        "sentiment_class": 0,
+        "thought": "The fallback cognition uses news, social sentiment, and technical features because the LLM belief response was empty. I do not see a strong personality-based reason to alter the rule desires. So I choose to stay patient."
+      },
+      {
+        "day": "第20天",
+        "symbol": "STOCK_008",
+        "stock_name": "匿名标的008",
+        "position": 0,
+        "avg_cost": 0.0,
+        "news_count": 1,
+        "action": "hold",
+        "quantity": 0,
+        "belief_score": 0.0,
+        "sentiment_class": 0,
+        "thought": "The fallback cognition uses news, social sentiment, and technical features because the LLM belief response was empty. I do not see a strong personality-based reason to alter the rule desires. So I choose to stay patient."
+      }
+    ]
+  },
+  "task2": {
+    "score": 100.0,
+    "component_scores": {
+      "price_time_priority": 100.0,
+      "surveillance": 100.0,
+      "f1": 100.0,
+      "response_latency": 100.0
+    },
+    "metrics": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "latency_scores": {
+        "wash": 1.0,
+        "spoof": 1.0,
+        "pump": 1.0
+      }
+    },
+    "scenarios": {
+      "price_time": {
+        "checks": {
+          "two_trades": true,
+          "first_seller_priority": true,
+          "second_seller_priority": true,
+          "partial_fill_quantity": true,
+          "no_false_alert": true
+        },
+        "trade_count": 2,
+        "alert_count": 0
+      },
+      "wash_trading": {
+        "detected": true,
+        "latency": 0,
+        "alert_count": 1
+      },
+      "spoofing": {
+        "detected": true,
+        "latency": 0,
+        "alert_count": 1
+      },
+      "pump_and_dump": {
+        "detected": true,
+        "latency": 0,
+        "alert_count": 1
+      }
+    }
+  },
+  "overall_score": 63.5
+}

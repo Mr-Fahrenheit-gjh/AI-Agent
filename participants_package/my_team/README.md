@@ -1,951 +1,338 @@
-# Team Submission 方案说明
+# my_team 投资 Agent 说明
 
-本文档记录当前 `my_team` 提交目录的完整实现逻辑，方便审查、调参和订正。正式入口是：
+本目录是比赛提交包 `my_team`。当前实现保留了官方示例接口，不修改 `submission_interface`，入口仍然是：
 
 ```python
 submission.py:create_submission(config)
 ```
 
-提交目录包含：
+当前版本有两套投资决策流程：
+
+1. **Legacy 规则版**：稳定、可复现、默认启用，也是当前本地固定六场景的高分版本。
+2. **LLM-BDI Demo 版**：从官方 Agent 代码出发，在 `InvestmentAgent.decide()` 内部接入 Belief -> Desire -> Action -> Final Thought 分层流程。旧版规则没有删除，只作为 fallback 保留。
+
+## 1. 官方接口边界
+
+官方评测只关心这些入口和返回结构：
+
+```text
+reset(seed, config)
+decide(observation) -> AgentDecision
+match_orders(orders, last_prices, tick) -> MatchResult
+```
+
+因此本项目遵守以下原则：
+
+- 不改 `submission_interface/api.py` 中的官方数据结构。
+- 不改官方传入的 `MarketObservation` 字段含义。
+- 不改 `AgentDecision` 的输出字段。
+- 新增模块只在 `my_team/` 内部使用。
+- 旧规则引擎保留，LLM 异常或空响应时可回退。
+
+## 2. 运行方式
+
+默认不启用 LLM：
+
+```powershell
+cd AI-Agent/participants_package
+python -m submission_interface.validator my_team
+python evaluate_submission.py my_team
+```
+
+启用 LLM：
+
+```powershell
+python evaluate_submission.py my_team --use-llm --llm-config-path config.yaml
+```
+
+60 天新测试集：
+
+```powershell
+python new_data\market_60d_package\evaluate_60d_submission.py my_team --use-llm --llm-config-path config.yaml
+```
+
+`config.yaml` 中的 OpenAI 兼容接口配置由 `llm_helper.py` 读取，API key 通过环境变量传入，例如：
+
+```yaml
+llm:
+  provider: "deepseek"
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-v4-flash"
+  temperature: 0.1
+  max_tokens: 384
+  api_key_env: "API_KEY"
+```
+
+## 3. LLM 开关
+
+`--use-llm` 只表示允许创建 LLM client。当前为了控制速度，默认只启用 **Belief 认知层 LLM**。
+
+可选开关：
+
+```yaml
+llm_desire_enabled: true
+llm_thought_enabled: true
+```
+
+含义：
+
+- `llm_desire_enabled`: 是否让 LLM 读取账户状态，输出人格化 Desire 修正标签。
+- `llm_thought_enabled`: 是否让 LLM 在最终动作确定后生成 `thought`。
+- 两者默认关闭，因为 60 天新测试集调用次数更多，三层 LLM 全开会非常慢。
+
+## 4. 当前模块结构
 
 ```text
 my_team/
-├── submission.py
-├── investment_agent.py
-├── exchange.py
-├── README.md
-└── requirements.txt
+  submission.py
+  investment_agent.py
+  exchange.py
+  feature_engineering.py
+  belief_scoring.py
+  desire_utility.py
+  llm_cognition_prompts.py
+  llm_desire_prompts.py
+  final_thought.py
 ```
 
-当前方案不依赖外部服务，默认不调用 LLM，使用规则式 BDI 投资 Agent 和规则式交易所监管 Agent。
+核心职责：
 
-## 1. 总体架构
+- `feature_engineering.py`: 技术面和账户状态特征工程。
+- `llm_cognition_prompts.py`: Belief 层系统提示词、人格提示词、few-shot、标准化输入输出。
+- `belief_scoring.py`: 把 LLM 认知 JSON 和技术特征映射为 `belief_score` 与 `sentiment_class`。
+- `desire_utility.py`: 结合 `belief_score` 和账户状态，计算 buy/sell/hold 三个 desire。
+- `llm_desire_prompts.py`: 可选的 LLM 人格化 Desire 修正层，输出离散标签，不直接输出动作。
+- `final_thought.py`: 最终 `thought` 生成。默认规则生成，可选 LLM 改写。
+- `investment_agent.py`: 统一调度新旧两套流程。
 
-评测系统只调用 `submission.py` 中的：
+## 5. Legacy 规则版
+
+旧版规则引擎位于 `investment_agent.py` 的 legacy region 中，核心方法是：
 
 ```python
-reset(seed, config)
-decide(observation)
-match_orders(orders, last_prices, tick)
+_legacy_rule_decide(symbol)
 ```
 
-内部转发关系：
+它保留了原来的散户行为模拟逻辑：
+
+- 新闻/社交词典情绪。
+- K 线动量、近期收益、估值锚。
+- 盈利时更容易止盈。
+- 亏损时更不愿意实现亏损。
+- 输出合法 `Decision`。
+
+如果没有启用 LLM，`decide()` 会直接调用 legacy。
+
+如果启用 LLM 但发生异常，例如接口空响应、网络错误、解析失败导致流程无法继续，`decide()` 会回退 legacy，并在 `thought` 中追加 fallback 标记。
+
+## 6. LLM-BDI Demo 流程
+
+启用 LLM 后，`InvestmentAgent.decide(symbol)` 的内部流程是：
 
 ```text
-decide(observation)
-  -> InvestmentAgent.ingest_market/news/social
-  -> InvestmentAgent.decide(symbol)
-  -> AgentDecision
-
-match_orders(orders, last_prices, tick)
-  -> ExchangeAgent.submit_order(...)
-  -> LimitOrderBook + RegulatoryAgent
-  -> MatchResult
-```
-
-`submission.py` 还做了一层稳定性保护：如果订单的 `side`、价格或数量非法，`ExchangeAgent` 创建订单时可能抛出 `ValueError`，此时该外部订单 ID 会被加入 `rejected_order_ids`，整轮评测不会崩溃。
-
-## 2. InvestmentAgent 设计
-
-### 2.1 核心目标
-
-该 Agent 不是收益最大化策略，而是模拟散户行为：
-
-- 看 K 线趋势、新闻、社交情绪。
-- 有浮盈时更容易部分止盈。
-- 有浮亏时更不愿意实现亏损。
-- 保证 `action`、`belief_score`、`sentiment_class`、`thought` 一致。
-- 控制交易量，避免不交易或过度交易。
-
-### 2.2 输入状态
-
-`submission.py` 每次收到 `MarketObservation` 后，会同步：
-
-```python
-agent.cash = observation.cash
-agent.positions[symbol] = Position(observation.position, observation.avg_cost)
-agent.ingest_market(symbol, klines)
-agent.ingest_news(symbol, news)
-agent.ingest_social(symbol, social_posts)
-```
-
-如果 `observation.position <= 0`，会删除该 symbol 的持仓，防止上一次调用残留。
-
-### 2.3 K 线特征
-
-在 `update_beliefs()` 中处理最近 K 线：
-
-```python
-closes = [row["close"] for row in market if row["close"] > 0]
-last = closes[-1]
-short = mean(closes[-5:])
-long = mean(closes[-20:]) if len(closes) >= 20 else mean(closes)
-```
-
-动量：
-
-```python
-momentum = clip((short / long - 1.0) * 10.0, -1.0, 1.0)
-```
-
-含义：
-
-- 最近 5 根均价高于长期均价，`momentum > 0`。
-- 最近 5 根均价低于长期均价，`momentum < 0`。
-- 乘以 `10.0` 是为了把较小涨跌放大到 `[-1, 1]` 区间。
-
-波动率：
-
-```python
-volatility = clip(std(returns(closes[-20:])) * 20.0, 0.0, 1.0)
-```
-
-当前版本中 `volatility` 会进入 `Belief`，但最终 `evidence_score` 没有直接使用它。它保留用于后续调参或 thought 扩展。
-
-近期收益：
-
-```python
-lookback = closes[-6] if len(closes) >= 6 else closes[0]
-market_return = clip((closes[-1] / lookback - 1.0) * 4.0, -1.0, 1.0)
-```
-
-含义：
-
-- 用近 6 根左右的涨跌衡量短期注意力。
-- 乘以 `4.0` 后裁剪到 `[-1, 1]`。
-
-### 2.4 新闻情绪特征
-
-新闻情绪使用词典，不调用外部模型。
-
-正向词：
-
-```text
-beat, growth, upgrade, bull, surge, profit, strong, record, buy, breakout,
-利好, 增长, 上调, 突破, 盈利, 买入
-```
-
-负向词：
-
-```text
-miss, fraud, downgrade, bear, crash, loss, weak, sell, risk, panic,
-利空, 亏损, 下调, 暴跌, 卖出, 风险, 恐慌
-```
-
-计算：
-
-```python
-pos = count(positive words)
-neg = count(negative words)
-sentiment = clip((pos - neg) / max(pos + neg + 2, 1), -1.0, 1.0)
-```
-
-这里加 `+2` 是为了平滑，避免只有一个词时情绪过度极端。
-
-### 2.5 社交情绪特征
-
-社交帖子会被标准化为：
-
-```python
-{"text": ..., "influence": ...}
-```
-
-如果传入的是字符串，默认：
-
-```python
-influence = 1.0
-```
-
-每条帖子的权重：
-
-```python
-weight = log1p(max(influence, 0.0))
-```
-
-社交情绪：
-
-```python
-social_pressure = clip(weighted_text_sentiment * (0.35 + herding), -1.0, 1.0)
-```
-
-其中 `herding` 来自人格参数。默认 `trend` 人格的：
-
-```python
-herding = 0.55
-```
-
-所以社交压力会乘以：
-
-```python
-0.35 + 0.55 = 0.90
-```
-
-含义：趋势型散户比较受社交共识影响，但不会无限放大。
-
-### 2.6 Fair Value 与 Confidence
-
-内部价值锚：
-
-```python
-fair_value = 0.82 * prior_fair_value + 0.18 * last * (1.0 + 0.07 * sentiment)
-```
-
-含义：
-
-- `0.82` 保留旧估值锚，体现散户认知有惯性。
-- `0.18` 接收最新价格和新闻情绪。
-- `0.07 * sentiment` 让正负新闻轻微改变估值锚。
-
-信心：
-
-```python
-confidence = clip(
-    0.30
-    + 0.25 * min(news_count / 10.0, 1.0)
-    + 0.25 * min(market_count / 30.0, 1.0)
-    + 0.20 * overconfidence,
-    0.05,
-    0.95,
-)
-```
-
-当前默认 `trend` 人格：
-
-```python
-overconfidence = 0.48
-```
-
-### 2.7 人格参数
-
-当前 `submission.py` 默认：
-
-```python
-personality = config.get("default_personality", "trend")
-```
-
-`trend` 参数：
-
-```python
-risk_appetite = 0.60
-loss_aversion = 1.35
-herding = 0.55
-overconfidence = 0.48
-disposition = 0.12
-turnover = 0.48
-```
-
-当前最终决策主要直接使用了 `herding`、`overconfidence`，其他参数保留在类中，便于后续扩展或换人格。
-
-### 2.8 证据分数 Evidence Score
-
-最终动作不是直接用 `Belief.score`，而是用一个更稳定、和评分指标更一致的 `evidence_score`：
-
-```python
-evidence_score = clip(
-    0.45 * belief.sentiment
-    + 0.35 * belief.social_pressure
-    + 0.35 * belief.momentum
-    + 0.15 * value_gap
-    + 0.20 * market_return,
-    -1.0,
-    1.0,
-)
-```
-
-各项含义：
-
-- `0.45 * sentiment`: 新闻方向权重最高。
-- `0.35 * social_pressure`: 社交情绪权重较高。
-- `0.35 * momentum`: 趋势确认。
-- `0.15 * value_gap`: 估值锚与当前价格偏离。
-- `0.20 * market_return`: 近期涨跌带来的注意力/趋势确认。
-
-价值偏离：
-
-```python
-value_gap = clip((fair_value / price - 1.0) * 8.0, -1.0, 1.0)
-```
-
-### 2.9 持仓盈亏状态
-
-当前盈亏：
-
-```python
-unrealized = price / avg_cost - 1.0
-```
-
-状态阈值：
-
-```python
-strong_profit = position exists and unrealized >= 0.18
-modest_profit = position exists and unrealized >= 0.05
-meaningful_loss = position exists and unrealized <= -0.05
-```
-
-解释：
-
-- `>= 18%`: 大幅盈利，容易出现落袋为安心理。
-- `>= 5%`: 普通浮盈。
-- `<= -5%`: 有意义浮亏，散户更容易惜售。
-
-### 2.10 决策表
-
-#### 空仓
-
-```python
-if evidence_score >= 0.20:
-    action = "buy"
-    belief_score = max(0.35, evidence_score)
-else:
-    action = "hold"
-    belief_score = 0.0
-```
-
-空仓看跌时不能做空，所以是 `hold`，并把 `belief_score` 归 0，避免出现“强看跌但 hold”导致信念-动作相关性下降。
-
-#### 大幅盈利
-
-```python
-elif strong_profit and evidence_score <= 0.55:
-    action = "sell"
-    belief_score = min(-0.35, evidence_score - 0.45)
-```
-
-解释：
-
-- 即使信息略偏正，只要不是极强正面，大幅盈利时也会部分止盈。
-- 将 `belief_score` 调为负或偏负，是为了让 `sell` 与输出信念一致。
-
-#### 普通浮盈
-
-```python
-elif modest_profit and evidence_score < -0.05:
-    action = "sell"
-    belief_score = min(-0.30, evidence_score)
-```
-
-普通盈利只有在证据开始转弱时卖出。
-
-#### 浮亏
-
-```python
-elif meaningful_loss:
-    if evidence_score <= -0.65:
-        action = "sell"
-        belief_score = min(-0.65, evidence_score)
-    else:
-        action = "hold"
-        belief_score = 0.0
-```
-
-解释：
-
-- 浮亏时不轻易卖，体现处置效应。
-- 只有强负面证据才止损。
-
-#### 普通持仓
-
-```python
-elif evidence_score >= 0.35:
-    action = "buy"
-    belief_score = max(0.35, evidence_score)
-elif evidence_score <= -0.35:
-    action = "sell"
-    belief_score = min(-0.35, evidence_score)
-else:
-    action = "hold"
-    belief_score = 0.0
-```
-
-### 2.11 情绪类别 Sentiment Class
-
-当前直接和动作绑定：
-
-```python
-sentiment_class = 1 if action == "buy" else -1 if action == "sell" else 0
-```
-
-这样做的目的：
-
-- 本地评分会计算 `sentiment_class` 或 `belief_score` 与 `action` 的 Spearman 相关。
-- 绑定后能避免 `thought` 看涨但 action 卖出的混乱情况。
-
-### 2.12 交易量控制
-
-买入：
-
-```python
-equity = cash + position_qty * price
-budget = min(cash, equity * 0.12)
-quantity = lot_size(budget / price)
-limit_price = price * 1.006
-```
-
-卖出：
-
-```python
-target_qty = lot_size(equity * 0.10 / price)
-quantity = min(position.quantity, max(100, target_qty))
-quantity = lot_size(quantity)
-limit_price = price * 0.994
-```
-
-其中：
-
-```python
-lot_size(quantity, lot=100)
-```
-
-含义：
-
-- 所有交易按 100 的手数取整。
-- 买入预算约为总权益 12%，但不能超过现金。
-- 卖出目标约为总权益 10%，至少尝试 100，但不能超过持仓。
-- `buy` 限价比当前价高 `0.6%`，提高成交可能性。
-- `sell` 限价比当前价低 `0.6%`，提高成交可能性。
-
-安全过滤：
-
-```python
-if buy_cost > cash:
-    quantity = lot_size(cash / limit_price)
-if sell:
-    quantity = min(quantity, lot_size(position.quantity))
-if quantity <= 0:
-    action = "hold"
-    belief_score = 0.0
-    limit_price = price
-```
-
-这样可以处理现金不足买 100 股、持仓不足卖 100 股等情况。
-
-### 2.13 Thought 生成
-
-`thought` 是模板化生成，保证和动作一致。
-
-核心字段：
-
-```text
-evidence feels bullish / bearish or profit-taking / mixed
-momentum
-news sentiment
-social pressure
-持仓盈亏心理
-therefore I choose action
-```
-
-例如卖出止盈：
-
-```text
-SIM evidence feels bearish or profit-taking; momentum 0.28; news sentiment 0.33; social pressure 0.30; my unrealized gain is 29.7%, so I want to lock in part of it; therefore I choose sell.
-```
-
-### 2.14 LLM 兼容与 Fallback
-
-代码保留了 `llm_client` 注入接口，但默认不启用。
-
-如果未来设置了 `llm_client`：
-
-```python
-if self.llm_client is not None:
-    return self._llm_decide(symbol)
-```
-
-当前已修复 LLM 失败时的 fallback：
-
-```python
-def _rule_decide_fallback(symbol):
-    temporarily set self.llm_client = None
-    return self.decide(symbol)
-    restore self.llm_client
-```
-
-这样 LLM 报错或返回空内容时不会递归卡死。
-
-## 3. ExchangeAgent 与撮合引擎
-
-### 3.1 撮合逻辑
-
-`LimitOrderBook` 保持标准价格-时间优先：
-
-买盘排序：
-
-```python
-(-price, timestamp, order_id)
-```
-
-卖盘排序：
-
-```python
-(price, timestamp, order_id)
-```
-
-成交条件：
-
-```python
-buy order crosses if buy_price >= best_ask
-sell order crosses if sell_price <= best_bid
-```
-
-成交数量：
-
-```python
-min(incoming.remaining, resting.remaining)
-```
-
-成交价格：
-
-```python
-resting order price
-```
-
-如果 incoming order 部分成交后还有剩余，则留在订单簿。
-
-### 3.2 输入稳定性
-
-`Order.__post_init__()` 校验：
-
-```python
-side in {"buy", "sell"}
-quantity > 0
-price > 0
-```
-
-`submission.py` 捕获非法订单异常并拒单：
-
-```python
-except (TypeError, ValueError):
-    rejected.append(order.order_id)
-    continue
-```
-
-## 4. RegulatoryAgent 设计
-
-监管逻辑在不改撮合引擎的前提下增强。
-
-### 4.1 监管参数
-
-默认参数：
-
-```python
-wash_window = 8
-spoof_cancel_window = 3
-large_order_ratio = 4.0
-pump_window = 12
-```
-
-含义：
-
-- `wash_window`: 反复互成交检测窗口。
-- `spoof_cancel_window`: 快速撤单窗口。
-- `large_order_ratio`: 大单阈值，订单量至少为参考深度的 4 倍。
-- `pump_window`: Pump-and-dump 滚动检测窗口。
-
-维护状态：
-
-```python
-events: recent submit/cancel events, maxlen=2000
-open_orders: currently open orders
-cancelled: recent cancellation records
-alerts: alert history
-entity_trades: recent trades, maxlen=2000
-symbol_trade_windows: per-symbol trade windows, maxlen=200
-pump_alerted_symbols: recently alerted symbols to avoid duplicate alerts
-```
-
-### 4.2 Wash Trading 检测
-
-#### 提交前同实体交叉
-
-在 `pre_submit()` 中先检查：
-
-```python
-contra = opposite side top 5 resting orders
-crosses = incoming price crosses resting price
-same_entity = incoming.entity_id == resting.entity_id
-```
-
-触发条件：
-
-```python
-crosses and same_entity
-```
-
-输出：
-
-```python
-alert_type = "wash_trading"
-severity = 0.98
-action = "block_order_and_freeze_entity"
-```
-
-因为 action 以 `block_` 开头，所以 `ExchangeAgent.submit_order()` 会拒绝该订单。
-
-#### 成交后同实体
-
-在 `on_trades()` 中：
-
-```python
-buyer_entity == seller_entity
-```
-
-输出：
-
-```python
-alert_type = "wash_trading"
-severity = 0.98
-action = "block_trade_and_freeze_entity"
-```
-
-#### 反复互成交
-
-短窗口内统计同一 buyer/seller pair：
-
-```python
-recent trades where timestamp >= current_timestamp - wash_window
-pair_count = count({buyer_id, seller_id} == current pair)
-```
-
-触发：
-
-```python
-pair_count >= 4
-```
-
-输出：
-
-```python
-alert_type = "wash_trading_ring"
-severity = 0.84
-action = "warn_and_sample_for_review"
-```
-
-### 4.3 Spoofing / Layering 检测
-
-#### Submit-stage spoofing
-
-这是当前本地评测和低延迟最关键的部分。
-
-计算盘口：
-
-```python
-bid, ask = book.best_bid_ask()
-same_side_depth = average(book.depth(order.side, 5))
-opposite_depth = average(book.depth(opposite_side, 5))
-reference_depth = max(same_side_depth, opposite_depth, 1.0)
-```
-
-大单：
-
-```python
-is_large = order.quantity >= reference_depth * large_order_ratio
-```
-
-当前：
-
-```python
-large_order_ratio = 4.0
-```
-
-远离盘口：
-
-```python
-buy order:  order.price < ask * 0.92
-sell order: order.price > bid * 1.08
-```
-
-即：
-
-- 买单低于最优卖价 8% 以上。
-- 卖单高于最优买价 8% 以上。
-
-不立即成交：
-
-```python
-not crosses
-```
-
-触发条件：
-
-```python
-is_large and far_from_touch and not crosses
-```
-
-输出：
-
-```python
-alert_type = "spoofing"
-severity = 0.78
-action = "monitor_or_throttle"
-```
-
-注意：该 alert 不拦截订单，只预警/限流。`ExchangeAgent.submit_order()` 会把非拦截型 pre-submit alert 一并返回。
-
-#### Cancel-stage spoofing
-
-如果外部调用 `cancel_order()`，会检测：
-
-```python
-age = cancel_timestamp - order.timestamp
-same_entity_recent = recent cancels from same entity within spoof_cancel_window
-is_large = quantity >= avg_depth * large_order_ratio
+MarketObservation
+  -> feature_engineering.build_market_features()
+  -> feature_engineering.build_account_features()
+  -> LLM Belief cognition
+  -> belief_scoring.build_belief_score()
+  -> desire_utility.build_rule_desires()
+  -> optional LLM desire adjustment
+  -> action/quantity/limit_price rule constraints
+  -> final_thought rule or optional LLM
+  -> Decision
 ```
 
-触发：
+### 6.1 Belief 层
 
-```python
-age <= spoof_cancel_window and is_large and len(same_entity_recent) >= 2
-```
+Belief 层只读：
 
-输出：
-
-```python
-alert_type = "spoofing"
-severity = 0.91
-action = "intervene_cancel_and_throttle"
-```
+- 当前标的元信息。
+- 技术面特征。
+- 新闻文本。
+- 社交文本。
+- 人格名称和人格提示词。
 
-### 4.4 Pump and Dump 检测
+Belief 层不读账户状态，这是刻意设计的：  
+`belief_score` 应表示“我对这只股票本身看涨还是看跌”，不应该混入“我现在赚了多少、亏了多少、有没有现金”。
 
-每笔成交后记录窗口：
+输出 JSON 包含：
 
-```python
+```json
 {
-  timestamp,
-  price,
-  quantity,
-  buyer_entity,
-  seller_entity,
+  "scope": "macro|sector|stock_specific|mixed|irrelevant",
+  "macro_direction": -1,
+  "macro_strength": 0.0,
+  "micro_direction": 0,
+  "micro_strength": 0.0,
+  "technical_direction": 0,
+  "technical_strength": 0.0,
+  "technical_bias": 0.0,
+  "attention_bias": 0.0,
+  "uncertainty": 0.0,
+  "retail_emotion": "neutral",
+  "belief_reason": "..."
 }
 ```
 
-按 symbol 分开维护，避免多标的互相污染。
+### 6.2 Belief Score 与 Sentiment Class
 
-检测窗口：
-
-```python
-recent trades where timestamp >= current_timestamp - pump_window
-pump_window = 12
-```
-
-至少需要：
-
-```python
-len(recent) >= 4
-```
-
-价格拉升：
-
-```python
-return_window = last_price / first_price - 1.0
-return_window >= 0.025
-```
-
-即窗口内上涨至少 2.5%。
-
-卖方集中度：
-
-```python
-seller_concentration = top_seller_qty / total_qty
-seller_concentration >= 0.45
-```
-
-即最大卖方贡献至少 45% 的成交量。
-
-买方分散度：
-
-```python
-distinct_buyers >= 3
-```
-
-即至少 3 个买方实体参与拉升。
-
-价格多数上行：
-
-```python
-mostly_rising = count(next_price >= prev_price) >= len(recent) - 2
-```
-
-允许少量不连续，但整体趋势要上行。
-
-触发条件：
-
-```python
-return_window >= 0.025
-and seller_concentration >= 0.45
-and distinct_buyers >= 3
-and mostly_rising
-```
-
-输出：
-
-```python
-alert_type = "pump_and_dump"
-severity = 0.88
-action = "warn_and_sample_for_review"
-entity_id = top_seller
-```
-
-重复告警抑制：
-
-```python
-if same symbol alerted within pump_window:
-    do not alert again
-```
-
-### 4.5 Alert 命名
-
-本地评测会通过关键词判断是否检测到异常，所以当前使用明确名称：
+`belief_scoring.py` 负责把 LLM 输出和技术特征合成：
 
 ```text
-wash_trading
-wash_trading_ring
-spoofing
-pump_and_dump
+belief_score in [-1, 1]
+sentiment_class in {-1, 0, 1}
 ```
 
-不要改成模糊名称，例如 `market_abuse`，否则评测脚本可能不识别。
+当前 demo 中：
 
-## 5. 当前稳定性测试覆盖
+- `belief_score > 0.10` -> `sentiment_class = 1`
+- `belief_score < -0.10` -> `sentiment_class = -1`
+- 其他 -> `sentiment_class = 0`
 
-新增测试文件：
+也就是说，`sentiment_class` 跟随 `belief_score` 的方向，但保留中性区间。这个阈值后续需要通过评测实验继续调。
+
+### 6.3 Desire 层
+
+Desire 层才注入账户状态：
+
+- 现金比例。
+- 当前标的持仓数量。
+- 平均成本心理锚。
+- 浮盈浮亏。
+- 前景理论价值函数。
+- 持仓权重。
+
+这层维护三个分数：
 
 ```text
-competition_solution/tests/test_team_submission_edges.py
+buy_desire
+sell_desire
+hold_desire
 ```
 
-覆盖：
+最终动作取决于三者竞争，而不是直接等于 `belief_score`。例如：
 
-- 同 seed reset 后决策完全一致。
-- 多类投资场景输出合法。
-- 现金不足买 100 股时稳定 hold。
-- 空仓看跌不做空。
-- LLM 调用失败 fallback。
-- 非法订单 reject，不崩溃。
-- reset 清空订单簿和监管状态。
-- 多 symbol 监管窗口隔离。
-- 正常近盘口大单不误报 spoofing。
-- 正常上涨但卖方不集中不误报 pump/dump。
-- 重复正常撮合不产生 alert。
-- spoofing 和 pump-and-dump 仍能检测。
+- `belief_score > 0` 表示仍看涨。
+- 但如果账户已大幅盈利，`sell_desire` 可能因为处置效应超过 `buy_desire`。
+- 这时可以出现“看涨但卖出止盈”的真实散户转折。
 
-## 6. 当前本地评分
+### 6.4 Final Thought
 
-运行命令：
+最终 `thought` 应解释完整心理链条：
 
-```bash
-cd participants_package
+```text
+我怎么看这只股票 -> 我的账户状态如何 -> buy/sell/hold 哪个欲望胜出 -> 为什么最终采取这个动作
+```
+
+默认使用 `final_thought.py` 的规则模板生成。  
+如果 `llm_thought_enabled: true`，才让 LLM 在动作已确定后改写为更自然的散户内心独白。
+
+## 7. 特征工程
+
+技术面特征来自 `build_market_features(klines)`：
+
+- OHLCV 当前快照：`open/high/low/close/volume/current_price`
+- 注意力乘数：成交量相对均量。
+- 锚定位置：价格在近期高低点区间的位置。
+- MA 趋势：MA5/MA20。
+- RSI 超买超卖。
+- 波动率。
+- 动量。
+- 近期收益。
+
+账户状态特征来自 `build_account_features(...)`：
+
+- `cash_raw`
+- `estimated_equity`
+- `cash_ratio`
+- `buying_power_lots`
+- `position_qty`
+- `avg_cost`
+- `pnl_return`
+- `cost_distance`
+- `prospect_value`
+- `position_weight`
+
+详细公式见：
+
+- `FEATURE_ENGINEERING.md`
+- `BELIEF_SCORING.md`
+- `DESIRE_UTILITY.md`
+- `FINAL_THOUGHT.md`
+
+## 8. 实测记录
+
+当前本地测试结果：
+
+```text
 python -m submission_interface.validator my_team
+通过
+
 python evaluate_submission.py my_team
-python -m unittest discover -s competition_solution/tests
+97.0 / 100
 ```
 
-当前结果：
+LLM-BDI demo 测试记录：
 
-```text
-validator: status ok
-unittest: 16 tests OK
-evaluate_submission.py: 97.0 / 100
-```
+- 官方六场景可以跑通。
+- DeepSeek v4flash 在部分场景会返回空文本。
+- 三层 LLM 全开在 60 天新测试集上过慢，30 天切片曾超过 15 分钟未完成。
+- 只开 Belief LLM 的 30 天切片可完成，但初版过于保守，出现全 hold，得分约 `27.1 / 100`。
 
-分项：
+因此当前结论是：
 
-```text
-任务一 InvestmentAgent: 93.9 / 100
-  format: 100.0
-  disposition_effect: 76.7
-  belief_correlation: 100.0
-  turnover_similarity: 98.6
-  DE = 0.2000
-  rho = 1.0000
-  turnover_WD = 0.0437
+- Legacy 规则版仍是稳定主线。
+- LLM-BDI 已完成接口和链路 demo。
+- 新测试集要取得有效提升，需要继续做调用频率、空响应 fallback、动作阈值和 prompt 稳定性实验。
 
-任务二 Exchange/RegulatoryAgent: 100.0 / 100
-  price_time_priority: 100.0
-  surveillance: 100.0
-  precision = 1.0000
-  recall = 1.0000
-  f1 = 1.0000
-```
+## 9. 已知问题
 
-## 7. 已知可调点
+1. **LLM 空响应**
+   DeepSeek v4flash 在长 prompt 或压力较高时可能返回空文本。当前处理是回退 legacy，避免空响应造成全 hold。
 
-### 7.1 处置效应偏强
+2. **调用成本高**
+   每个 observation 调一次 LLM，60 天新测试集会非常慢。三层 LLM 全开不适合直接评测。
 
-当前本地：
+3. **Belief 到 Action 偏保守**
+   初版 Desire 阈值偏谨慎，容易 hold。后续需要围绕 turnover、DE、action diversity 调参。
 
-```text
-DE = 0.2000
-```
+4. **人格参数仍是 demo**
+   目前人格主要通过自然语言 prompt 注入，少量参数用于规则层。人格参数不是最终校准值，后续应通过实验调优。
 
-满分区间是：
+5. **新闻/社交情绪连续化仍需校准**
+   Few-shot 提供了参考量纲，但宏观/微观强度、uncertainty 和 attention bias 的输出稳定性仍需用新测试集回放验证。
 
-```text
-0.05 <= DE <= 0.15
-```
+## 10. 后续优化方向
 
-所以任务一没有满分。如果要进一步调低 DE，可考虑：
+优先级建议：
 
-- 把 `strong_profit` 阈值从 `0.18` 提高到 `0.22`。
-- 把 `strong_profit and evidence_score <= 0.55` 改成 `<= 0.45`。
-- 降低盈利止盈触发频率。
+1. **让新测试集先快起来**
+   增加 LLM 缓存，或只在有新闻/社交文本、技术异动较强时调用 LLM。
 
-风险：可能降低 belief-action 相关性或 turnover 相似度。
+2. **优化 fallback**
+   区分“LLM 空响应”“LLM 有效中性判断”“解析失败”，不要把接口问题当作市场中性。
 
-### 7.2 Spoofing 阈值
+3. **调 Desire 阈值**
+   用 60 天新测试集观察 buy/sell/hold 分布，调整 `desire_utility.py` 和 `_action_from_desires()`。
 
-当前远离盘口阈值：
+4. **校准 sentiment 阈值**
+   当前 `0.10` 是 demo 阈值。后续可试 `0.07/0.12/0.15`。
 
-```text
-buy price < ask * 0.92
-sell price > bid * 1.08
-```
+5. **完善 Final Thought**
+   让 `thought` 明确区分 belief 与 action：例如“仍看涨但盈利太大所以止盈”“看跌但亏损域里不愿实现亏损”。
 
-如果隐藏测试正常远离挂单较多，可放宽为：
+6. **人格分布实验**
+   `config.yaml` 中的 `agents.personality_mix` 是后续多 Agent 人格分布调参入口。当前主要使用 `default_personality`，人格分布还没有作为核心实验变量。
 
-```text
-0.90 / 1.10
-```
+## 11. 当前推荐策略
 
-如果隐藏测试 spoofing 更隐蔽，可收紧为：
+短期提交或跑分：
 
-```text
-0.95 / 1.05
-```
+- 使用默认 legacy 规则版。
+- 不开 LLM，确保稳定和速度。
 
-### 7.3 Pump-and-dump 阈值
+研究和 demo：
 
-当前：
-
-```text
-return_window >= 2.5%
-seller_concentration >= 45%
-distinct_buyers >= 3
-len(recent) >= 4
-```
-
-如果误报正常上涨，建议提高：
-
-```text
-return_window >= 4%
-seller_concentration >= 55%
-```
-
-如果漏报弱 P&D，可降低：
-
-```text
-return_window >= 2%
-seller_concentration >= 40%
-```
-
-## 8. 审查重点
-
-建议重点审查：
-
-1. `evidence_score` 各权重是否合理。
-2. 大幅盈利止盈阈值 `18%` 是否过低。
-3. 浮亏止损阈值 `evidence_score <= -0.65` 是否过严。
-4. 买入预算 `12% equity` 和卖出目标 `10% equity` 是否符合你想要的换手率。
-5. spoofing 的 `8%` 远离盘口阈值是否过宽或过窄。
-6. pump-and-dump 的 `2.5%` 短窗口涨幅和 `45%` 卖方集中度是否适合隐藏测试。
-7. `sentiment_class` 与 `action` 绑定是否过于迎合本地 Spearman 指标。
+- 开 `--use-llm`，默认只跑 Belief 层。
+- 先不要打开 `llm_desire_enabled` 和 `llm_thought_enabled`。
+- 观察 LLM 输出日志或 JSON 报告，再逐步调 prompt 和阈值。

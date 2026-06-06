@@ -40,7 +40,28 @@ import hashlib
 import math
 import random
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
+
+from belief_scoring import build_belief_score
+from desire_utility import apply_desire_adjustment, build_rule_desires
+from feature_engineering import build_account_features, build_market_features
+from final_thought import (
+    build_rule_thought,
+    build_thought_system_prompt,
+    build_thought_user_prompt,
+    parse_thought_response,
+)
+from llm_cognition_prompts import (
+    build_cognition_system_prompt,
+    build_cognition_user_prompt,
+    parse_cognition_response,
+)
+from llm_desire_prompts import (
+    build_desire_system_prompt,
+    build_desire_user_prompt,
+    parse_desire_adjustment,
+)
 
 
 LLMClient = Callable[[str, str], str]
@@ -210,6 +231,8 @@ class InvestmentAgent:
     positions: Dict[str, Position] = field(default_factory=dict)
     llm_client: Optional[LLMClient] = None
     seed: Optional[int] = None
+    llm_desire_enabled: bool = False
+    llm_thought_enabled: bool = False
     traits: Dict[str, float] = field(default_factory=dict)
     beliefs: Dict[str, Belief] = field(default_factory=dict)
 
@@ -296,7 +319,8 @@ class InvestmentAgent:
         self.beliefs[symbol] = belief
         return belief
 
-    def decide(self, symbol: str) -> Decision:
+    # region Legacy rule-based decision engine
+    def _legacy_rule_decide(self, symbol: str) -> Decision:
         belief = self.update_beliefs(symbol)
         price = self.current_price(symbol)
         if price <= 0:
@@ -383,11 +407,6 @@ class InvestmentAgent:
 
         sentiment_class = 1 if action == "buy" else -1 if action == "sell" else 0
 
-        # 🚀 ADVANCED: 取消下面的注释以启用 LLM 生成决策（替换规则式决策）
-        # 使用前需要先设置 self.llm_client（通过构造函数或直接赋值）
-        if self.llm_client is not None:
-            return self._llm_decide(symbol)
-
         thought = self._build_thought(symbol, belief, action, unrealized, value_gap)
         decision = Decision(
             agent_id=self.agent_id,
@@ -402,6 +421,259 @@ class InvestmentAgent:
         self.memory.append({"symbol": symbol, "belief": belief, "decision": decision})
         self.memory = self.memory[-200:]
         return decision
+    # endregion
+
+    def decide(self, symbol: str) -> Decision:
+        """Return a decision for one symbol.
+
+        Default path remains the legacy deterministic agent. When ``llm_client``
+        is injected, use the new BDI demo chain:
+        feature engineering -> LLM belief -> belief scoring -> desire utility
+        -> LLM desire adjustment -> action -> final thought.
+        """
+
+        if self.llm_client is None:
+            return self._legacy_rule_decide(symbol)
+        try:
+            return self._bdi_llm_decide(symbol)
+        except Exception as exc:
+            fallback = self._legacy_rule_decide(symbol)
+            fallback.thought = f"{fallback.thought} LLM pipeline fallback: {type(exc).__name__}."
+            return fallback
+
+    def _bdi_llm_decide(self, symbol: str) -> Decision:
+        price = self.current_price(symbol)
+        if price <= 0:
+            return Decision(self.agent_id, symbol, "hold", 0, 0.0, "No tradable price.", 0.0, 0)
+
+        market_rows = self._market.get(symbol, [])
+        market_features = build_market_features(market_rows)
+        position = self.positions.get(symbol)
+        position_qty = position.quantity if position else 0
+        avg_cost = position.avg_cost if position else 0.0
+        account_features = build_account_features(
+            cash=self.cash,
+            symbol=symbol,
+            position=position_qty,
+            avg_cost=avg_cost,
+            current_price=price,
+        )
+        observation = SimpleNamespace(
+            agent_id=self.agent_id,
+            symbol=symbol,
+            tick=len(self.memory) + 1,
+            extra={},
+            news=list(self._news.get(symbol, [])),
+            social_posts=list(self._social.get(symbol, [])),
+        )
+
+        cognition_system = build_cognition_system_prompt(self.personality)
+        cognition_user = build_cognition_user_prompt(observation, market_features, self.personality)
+        cognition_raw = self.llm_client(cognition_system, cognition_user)  # type: ignore[misc]
+        if not str(cognition_raw or "").strip():
+            raise RuntimeError("empty LLM belief response")
+        cognition = parse_cognition_response(cognition_raw)
+        if self._cognition_is_empty(cognition, observation):
+            cognition = self._heuristic_cognition(symbol, market_features)
+
+        belief_fields = build_belief_score(cognition, market_features)
+        belief_context: Dict[str, Any] = {**cognition, **belief_fields}
+
+        rule_desires = build_rule_desires(
+            belief_score=float(belief_fields["belief_score"]),
+            account_features=account_features,
+            cognition=belief_context,
+            market_features=market_features,
+        )
+
+        if self.llm_desire_enabled:
+            desire_system = build_desire_system_prompt(self.personality)
+            desire_user = build_desire_user_prompt(
+                personality=self.personality,
+                belief=belief_context,
+                rule_desires=rule_desires,
+                account_features=account_features,
+                market_context=market_features,
+            )
+            desire_raw = self.llm_client(desire_system, desire_user)  # type: ignore[misc]
+            desire_adjustment = parse_desire_adjustment(desire_raw)
+        else:
+            desire_adjustment = parse_desire_adjustment("")
+        final_desires = apply_desire_adjustment(rule_desires, desire_adjustment)
+        desire_context: Dict[str, Any] = {**rule_desires, **final_desires, "desire_reason": desire_adjustment.get("desire_reason", "")}
+
+        action, quantity, limit_price, official_score, official_sentiment = self._action_from_desires(
+            symbol=symbol,
+            price=price,
+            account_features=account_features,
+            final_desires=final_desires,
+        )
+
+        action_context = {
+            "action": action,
+            "quantity": quantity,
+            "limit_price": limit_price,
+            "official_belief_score": official_score,
+            "official_sentiment_class": official_sentiment,
+        }
+        thought = build_rule_thought(
+            personality=self.personality,
+            belief=belief_context,
+            desire=desire_context,
+            action=action_context,
+            account_features=account_features,
+            market_context=market_features,
+        )
+        if self.llm_thought_enabled:
+            thought_system = build_thought_system_prompt(self.personality)
+            thought_user = build_thought_user_prompt(
+                personality=self.personality,
+                belief=belief_context,
+                desire=desire_context,
+                action=action_context,
+                account_features=account_features,
+                market_context=market_features,
+            )
+            try:
+                thought_raw = self.llm_client(thought_system, thought_user)  # type: ignore[misc]
+                thought = parse_thought_response(thought_raw)["thought"]
+            except Exception:
+                pass
+
+        decision = Decision(
+            agent_id=self.agent_id,
+            symbol=symbol,
+            action=action,
+            quantity=int(quantity),
+            limit_price=round(float(limit_price), 4),
+            thought=thought,
+            belief_score=round(float(official_score), 4),
+            sentiment_class=int(official_sentiment),
+        )
+        self.memory.append(
+            {
+                "symbol": symbol,
+                "market_features": market_features,
+                "account_features": account_features,
+                "cognition": cognition,
+                "belief": belief_fields,
+                "rule_desires": rule_desires,
+                "desire_adjustment": desire_adjustment,
+                "final_desires": final_desires,
+                "decision": decision,
+            }
+        )
+        self.memory = self.memory[-200:]
+        return decision
+
+    def _cognition_is_empty(self, cognition: Mapping[str, Any], observation: Any) -> bool:
+        has_text = bool(getattr(observation, "news", None) or getattr(observation, "social_posts", None))
+        return (
+            has_text
+            and cognition.get("scope") == "irrelevant"
+            and abs(float(cognition.get("micro_strength", 0.0) or 0.0)) <= 1e-9
+            and abs(float(cognition.get("technical_bias", 0.0) or 0.0)) <= 1e-9
+        )
+
+    def _heuristic_cognition(self, symbol: str, market_features: Mapping[str, Any]) -> Dict[str, Any]:
+        text_sentiment = self._text_sentiment(self._news.get(symbol, []))
+        social_sentiment = self._social_sentiment(self._social.get(symbol, []))
+        text_score = _clip(0.65 * text_sentiment + 0.35 * social_sentiment, -1.0, 1.0)
+        technical_bias = _clip(
+            0.40 * float(market_features.get("ma_score", 0.0))
+            + 0.30 * float(market_features.get("momentum_score", 0.0))
+            + 0.15 * float(market_features.get("recent_return_score", 0.0))
+            + 0.10 * float(market_features.get("rsi_score", 0.0))
+            + 0.05 * float(market_features.get("anchor_score", 0.0)),
+            -1.0,
+            1.0,
+        )
+        micro_direction = 1 if text_score > 0.08 else -1 if text_score < -0.08 else 0
+        technical_direction = 1 if technical_bias > 0.08 else -1 if technical_bias < -0.08 else 0
+        uncertainty = _clip(0.55 - 0.25 * abs(text_score) + 0.25 * float(market_features.get("volatility_score", 0.0)), 0.15, 0.85)
+        emotion = "neutral"
+        if text_score > 0.25:
+            emotion = "fomo"
+        elif text_score < -0.25:
+            emotion = "panic"
+        return {
+            "scope": "stock_specific" if micro_direction else "mixed",
+            "macro_direction": 0,
+            "macro_strength": 0.1,
+            "micro_direction": micro_direction,
+            "micro_strength": _clip(abs(text_score), 0.0, 1.0),
+            "technical_direction": technical_direction,
+            "technical_strength": _clip(abs(technical_bias), 0.0, 1.0),
+            "technical_bias": technical_bias,
+            "attention_bias": _clip(float(market_features.get("attention_score", 0.0)) + 0.25 * social_sentiment, -1.0, 1.0),
+            "uncertainty": uncertainty,
+            "retail_emotion": emotion,
+            "belief_reason": "The fallback cognition uses news, social sentiment, and technical features because the LLM belief response was empty.",
+        }
+
+    def _action_from_desires(
+        self,
+        *,
+        symbol: str,
+        price: float,
+        account_features: Mapping[str, Any],
+        final_desires: Mapping[str, Any],
+    ) -> tuple[str, int, float, float, int]:
+        position = self.positions.get(symbol)
+        has_position = bool(position and position.quantity > 0)
+        buy_desire = float(final_desires.get("buy_desire", 0.0))
+        sell_desire = float(final_desires.get("sell_desire", 0.0))
+        hold_desire = float(final_desires.get("hold_desire", 0.0))
+
+        if not has_position:
+            sell_desire = 0.0
+        if self.cash < price * 100:
+            buy_desire = 0.0
+
+        action = max(
+            ("buy", "sell", "hold"),
+            key=lambda name: {"buy": buy_desire, "sell": sell_desire, "hold": hold_desire}[name],
+        )
+        if action == "buy" and buy_desire < max(0.22, hold_desire + 0.03):
+            action = "hold"
+        if action == "sell" and sell_desire < max(0.24, hold_desire + 0.03):
+            action = "hold"
+
+        quantity = 0
+        limit_price = price
+        if action == "buy":
+            equity = max(self.cash + (position.quantity * price if position else 0.0), 1.0)
+            budget_fraction = _clip(0.05 + 0.12 * buy_desire, 0.04, 0.16)
+            budget = min(self.cash, equity * budget_fraction)
+            quantity = _lot_size(budget / max(price, 1e-9))
+            limit_price = price * (1.0 + 0.006)
+        elif action == "sell" and position:
+            sell_fraction = _clip(0.20 + 0.55 * sell_desire, 0.20, 0.75)
+            quantity = _lot_size(position.quantity * sell_fraction)
+            if quantity <= 0 and position.quantity >= 100:
+                quantity = 100
+            quantity = min(quantity, _lot_size(position.quantity))
+            limit_price = price * (1.0 - 0.006)
+
+        if action == "buy" and quantity * limit_price > self.cash:
+            quantity = _lot_size(self.cash / max(limit_price, 1e-9))
+        if action == "sell" and position:
+            quantity = min(quantity, _lot_size(position.quantity))
+        if quantity <= 0:
+            action = "hold"
+            quantity = 0
+            limit_price = price
+
+        if action == "buy":
+            official_score = max(0.35, buy_desire)
+            official_sentiment = 1
+        elif action == "sell":
+            official_score = -max(0.35, sell_desire)
+            official_sentiment = -1
+        else:
+            official_score = 0.0
+            official_sentiment = 0
+        return action, int(quantity), round(float(limit_price), 4), _clip(official_score, -1.0, 1.0), official_sentiment
 
     def current_price(self, symbol: str) -> float:
         rows = self._market.get(symbol, [])
@@ -538,12 +810,7 @@ class InvestmentAgent:
         )
 
     def _rule_decide_fallback(self, symbol: str) -> Decision:
-        llm_client = self.llm_client
-        self.llm_client = None
-        try:
-            return self.decide(symbol)
-        finally:
-            self.llm_client = llm_client
+        return self._legacy_rule_decide(symbol)
 
     def _parse_llm_response(self, raw: str) -> dict:
         """🔧 MODIFIABLE: 解析 LLM 原始响应为字典。
