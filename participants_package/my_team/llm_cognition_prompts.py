@@ -16,7 +16,6 @@ from typing import Any, Dict, Mapping, Optional
 
 ALLOWED_SCOPES = {"macro", "sector", "stock_specific", "mixed", "irrelevant"}
 ALLOWED_EMOTIONS = {"fomo", "panic", "regret", "relief", "greed", "caution", "neutral"}
-ALLOWED_SENTIMENTS = {-1, 0, 1}
 
 
 DEFAULT_COGNITION: Dict[str, Any] = {
@@ -31,8 +30,6 @@ DEFAULT_COGNITION: Dict[str, Any] = {
     "attention_bias": 0.0,
     "uncertainty": 0.5,
     "retail_emotion": "neutral",
-    "stock_belief_score": 0.0,
-    "sentiment_class": 0,
     "belief_reason": "I do not see enough reliable evidence to form a strong view.",
 }
 
@@ -50,8 +47,6 @@ COGNITION_OUTPUT_SCHEMA_TEXT = """Output schema:
   "attention_bias": -1.0 to 1.0,
   "uncertainty": 0.0 to 1.0,
   "retail_emotion": "fomo" | "panic" | "regret" | "relief" | "greed" | "caution" | "neutral",
-  "stock_belief_score": -1.0 to 1.0,
-  "sentiment_class": -1 | 0 | 1,
   "belief_reason": "one concise first-person belief about this stock"
 }"""
 
@@ -170,7 +165,7 @@ FEW_SHOT_EXAMPLES = [
             "news": ["Central bank cuts policy rates; analysts expect liquidity and risk appetite to improve."],
             "social_posts": [],
         },
-        "assistant": {"scope": "macro", "macro_direction": 1, "macro_strength": 0.65, "micro_direction": 0, "micro_strength": 0.1, "technical_direction": 1, "technical_strength": 0.45, "technical_bias": 0.35, "attention_bias": 0.1, "uncertainty": 0.45, "retail_emotion": "fomo", "stock_belief_score": 0.32, "sentiment_class": 1, "belief_reason": "The policy news improves broad risk appetite and the trend looks positive, but I do not see a strong stock-specific catalyst."},
+        "assistant": {"scope": "macro", "macro_direction": 1, "macro_strength": 0.65, "micro_direction": 0, "micro_strength": 0.1, "technical_direction": 1, "technical_strength": 0.45, "technical_bias": 0.35, "attention_bias": 0.1, "uncertainty": 0.45, "retail_emotion": "fomo", "belief_reason": "The policy news improves broad risk appetite and the trend looks positive, but I do not see a strong stock-specific catalyst."},
     },
     {
         "name": "stock-specific bad news overwhelms oversold temptation",
@@ -181,7 +176,7 @@ FEW_SHOT_EXAMPLES = [
             "news": ["The current stock receives an exchange inquiry; investors worry about revenue recognition and cash-flow quality."],
             "social_posts": [{"text": "This name is too risky; better run first.", "influence": 8}],
         },
-        "assistant": {"scope": "stock_specific", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": -1, "micro_strength": 0.85, "technical_direction": -1, "technical_strength": 0.70, "technical_bias": -0.65, "attention_bias": -0.55, "uncertainty": 0.75, "retail_emotion": "panic", "stock_belief_score": -0.78, "sentiment_class": -1, "belief_reason": "The stock-specific regulatory concern and weak trend make this stock feel unsafe despite the oversold signal."},
+        "assistant": {"scope": "stock_specific", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": -1, "micro_strength": 0.85, "technical_direction": -1, "technical_strength": 0.70, "technical_bias": -0.65, "attention_bias": -0.55, "uncertainty": 0.75, "retail_emotion": "panic", "belief_reason": "The stock-specific regulatory concern and weak trend make this stock feel unsafe despite the oversold signal."},
     },
     {
         "name": "profit-pressure words are not account state in belief layer",
@@ -192,7 +187,7 @@ FEW_SHOT_EXAMPLES = [
             "news": ["Recent risk appetite has improved, but there is no direct new catalyst for this stock."],
             "social_posts": [{"text": "It rose too fast; maybe it is time to take profits.", "influence": 4}],
         },
-        "assistant": {"scope": "mixed", "macro_direction": 1, "macro_strength": 0.3, "micro_direction": 0, "micro_strength": 0.1, "technical_direction": 1, "technical_strength": 0.55, "technical_bias": 0.25, "attention_bias": 0.2, "uncertainty": 0.55, "retail_emotion": "caution", "stock_belief_score": 0.18, "sentiment_class": 1, "belief_reason": "The stock still has positive trend evidence, but the high anchor and overbought signal make my stock-level view only mildly bullish."},
+        "assistant": {"scope": "mixed", "macro_direction": 1, "macro_strength": 0.3, "micro_direction": 0, "micro_strength": 0.1, "technical_direction": 1, "technical_strength": 0.55, "technical_bias": 0.25, "attention_bias": 0.2, "uncertainty": 0.55, "retail_emotion": "caution", "belief_reason": "The stock still has positive trend evidence, but the high anchor and overbought signal make my stock-level view only mildly bullish."},
     },
     {
         "name": "social heat alone should not become strong conviction",
@@ -203,7 +198,7 @@ FEW_SHOT_EXAMPLES = [
             "news": ["Overall market turnover is active, but this symbol has no clear company-level news."],
             "social_posts": [{"text": "Everyone is watching this one; it may launch soon.", "influence": 9}],
         },
-        "assistant": {"scope": "mixed", "macro_direction": 0, "macro_strength": 0.2, "micro_direction": 0, "micro_strength": 0.2, "technical_direction": 0, "technical_strength": 0.2, "technical_bias": -0.1, "attention_bias": 0.55, "uncertainty": 0.65, "retail_emotion": "fomo", "stock_belief_score": 0.08, "sentiment_class": 0, "belief_reason": "The social attention is tempting, but the weak trend and lack of stock-specific news keep my stock view close to neutral."},
+        "assistant": {"scope": "mixed", "macro_direction": 0, "macro_strength": 0.2, "micro_direction": 0, "micro_strength": 0.2, "technical_direction": 0, "technical_strength": 0.2, "technical_bias": -0.1, "attention_bias": 0.55, "uncertainty": 0.65, "retail_emotion": "fomo", "belief_reason": "The social attention is tempting, but the weak trend and lack of stock-specific news keep my stock view close to neutral."},
     },
     {
         "name": "A_gain_bull: bullish evidence independent of account profit",
@@ -214,7 +209,7 @@ FEW_SHOT_EXAMPLES = [
             "news": ["earnings upgrade, strong growth, breakout buying"],
             "social_posts": [{"text": "bullish breakout buy", "influence": 8}],
         },
-        "assistant": {"scope": "stock_specific", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": 1, "micro_strength": 0.8, "technical_direction": 1, "technical_strength": 0.75, "technical_bias": 0.65, "attention_bias": 0.35, "uncertainty": 0.25, "retail_emotion": "greed", "stock_belief_score": 0.78, "sentiment_class": 1, "belief_reason": "The upgrade, growth language, and breakout trend make this stock look strongly bullish."},
+        "assistant": {"scope": "stock_specific", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": 1, "micro_strength": 0.8, "technical_direction": 1, "technical_strength": 0.75, "technical_bias": 0.65, "attention_bias": 0.35, "uncertainty": 0.25, "retail_emotion": "greed", "belief_reason": "The upgrade, growth language, and breakout trend make this stock look strongly bullish."},
     },
     {
         "name": "A_loss_bear: bearish evidence independent of account loss",
@@ -225,7 +220,7 @@ FEW_SHOT_EXAMPLES = [
             "news": ["lawsuit risk, downgrade, liquidity stress"],
             "social_posts": [{"text": "panic sell, avoid", "influence": 9}],
         },
-        "assistant": {"scope": "stock_specific", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": -1, "micro_strength": 0.9, "technical_direction": -1, "technical_strength": 0.8, "technical_bias": -0.75, "attention_bias": -0.65, "uncertainty": 0.70, "retail_emotion": "panic", "stock_belief_score": -0.86, "sentiment_class": -1, "belief_reason": "The lawsuit, downgrade, liquidity stress, and falling trend make this stock look clearly bearish."},
+        "assistant": {"scope": "stock_specific", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": -1, "micro_strength": 0.9, "technical_direction": -1, "technical_strength": 0.8, "technical_bias": -0.75, "attention_bias": -0.65, "uncertainty": 0.70, "retail_emotion": "panic", "belief_reason": "The lawsuit, downgrade, liquidity stress, and falling trend make this stock look clearly bearish."},
     },
     {
         "name": "A_cash_bull: bullish evidence independent of available cash",
@@ -236,7 +231,7 @@ FEW_SHOT_EXAMPLES = [
             "news": ["new product launch, revenue beat, analyst upgrade"],
             "social_posts": [{"text": "accumulate, upside surprise", "influence": 6}],
         },
-        "assistant": {"scope": "stock_specific", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": 1, "micro_strength": 0.85, "technical_direction": 1, "technical_strength": 0.8, "technical_bias": 0.70, "attention_bias": 0.30, "uncertainty": 0.30, "retail_emotion": "fomo", "stock_belief_score": 0.82, "sentiment_class": 1, "belief_reason": "The product launch, revenue beat, upgrade, and strong trend make this stock look bullish."},
+        "assistant": {"scope": "stock_specific", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": 1, "micro_strength": 0.85, "technical_direction": 1, "technical_strength": 0.8, "technical_bias": 0.70, "attention_bias": 0.30, "uncertainty": 0.30, "retail_emotion": "fomo", "belief_reason": "The product launch, revenue beat, upgrade, and strong trend make this stock look bullish."},
     },
     {
         "name": "A_cash_bear: bearish evidence independent of no position",
@@ -247,7 +242,7 @@ FEW_SHOT_EXAMPLES = [
             "news": ["fraud rumor, forced selling, demand shock"],
             "social_posts": [{"text": "stay away, heavy selling", "influence": 7}],
         },
-        "assistant": {"scope": "stock_specific", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": -1, "micro_strength": 0.85, "technical_direction": -1, "technical_strength": 0.75, "technical_bias": -0.65, "attention_bias": -0.45, "uncertainty": 0.70, "retail_emotion": "caution", "stock_belief_score": -0.82, "sentiment_class": -1, "belief_reason": "The fraud rumor, demand shock, and heavy selling make this stock look bearish even if the price is low."},
+        "assistant": {"scope": "stock_specific", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": -1, "micro_strength": 0.85, "technical_direction": -1, "technical_strength": 0.75, "technical_bias": -0.65, "attention_bias": -0.45, "uncertainty": 0.70, "retail_emotion": "caution", "belief_reason": "The fraud rumor, demand shock, and heavy selling make this stock look bearish even if the price is low."},
     },
     {
         "name": "A_neutral: mixed range-bound scenario",
@@ -258,7 +253,7 @@ FEW_SHOT_EXAMPLES = [
             "news": ["mixed guidance, no clear catalyst"],
             "social_posts": [{"text": "wait and see", "influence": 3}],
         },
-        "assistant": {"scope": "irrelevant", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": 0, "micro_strength": 0.1, "technical_direction": 0, "technical_strength": 0.1, "technical_bias": 0.0, "attention_bias": 0.0, "uncertainty": 0.80, "retail_emotion": "neutral", "stock_belief_score": 0.0, "sentiment_class": 0, "belief_reason": "The signal is mixed and range-bound, so my stock-level view stays neutral."},
+        "assistant": {"scope": "irrelevant", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": 0, "micro_strength": 0.1, "technical_direction": 0, "technical_strength": 0.1, "technical_bias": 0.0, "attention_bias": 0.0, "uncertainty": 0.80, "retail_emotion": "neutral", "belief_reason": "The signal is mixed and range-bound, so my stock-level view stays neutral."},
     },
     {
         "name": "A_gain_pressure: stretched valuation affects belief, not account profit",
@@ -269,7 +264,7 @@ FEW_SHOT_EXAMPLES = [
             "news": ["strong rally but valuation looks stretched"],
             "social_posts": [{"text": "take profit soon", "influence": 6}],
         },
-        "assistant": {"scope": "mixed", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": 0, "micro_strength": 0.3, "technical_direction": 1, "technical_strength": 0.55, "technical_bias": 0.25, "attention_bias": -0.15, "uncertainty": 0.55, "retail_emotion": "caution", "stock_belief_score": 0.16, "sentiment_class": 1, "belief_reason": "The trend remains positive, but the stretched valuation and overbought signal make my stock-level bullishness weak."},
+        "assistant": {"scope": "mixed", "macro_direction": 0, "macro_strength": 0.1, "micro_direction": 0, "micro_strength": 0.3, "technical_direction": 1, "technical_strength": 0.55, "technical_bias": 0.25, "attention_bias": -0.15, "uncertainty": 0.55, "retail_emotion": "caution", "belief_reason": "The trend remains positive, but the stretched valuation and overbought signal make my stock-level bullishness weak."},
     },
 ]
 
@@ -372,8 +367,6 @@ def normalize_cognition(data: Mapping[str, Any]) -> Dict[str, Any]:
     result["attention_bias"] = _clip_float(result.get("attention_bias"), -1.0, 1.0, 0.0)
     result["uncertainty"] = _clip_float(result.get("uncertainty"), 0.0, 1.0, 0.5)
     result["retail_emotion"] = _one_of(result.get("retail_emotion"), ALLOWED_EMOTIONS, "neutral")
-    result["stock_belief_score"] = _clip_float(result.get("stock_belief_score"), -1.0, 1.0, 0.0)
-    result["sentiment_class"] = _sentiment_class(result.get("sentiment_class"), result["stock_belief_score"])
     result["belief_reason"] = str(result.get("belief_reason") or DEFAULT_COGNITION["belief_reason"]).strip()
     if not result["belief_reason"]:
         result["belief_reason"] = DEFAULT_COGNITION["belief_reason"]
@@ -433,20 +426,6 @@ def _direction(value: Any) -> int:
     if numeric > 0.25:
         return 1
     if numeric < -0.25:
-        return -1
-    return 0
-
-
-def _sentiment_class(value: Any, score: float) -> int:
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError):
-        numeric = 0
-    if numeric in ALLOWED_SENTIMENTS:
-        return numeric
-    if score > 0.05:
-        return 1
-    if score < -0.05:
         return -1
     return 0
 

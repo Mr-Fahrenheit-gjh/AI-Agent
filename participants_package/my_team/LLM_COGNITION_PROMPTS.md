@@ -35,8 +35,8 @@ Belief 层必须去账户状态化。
 例子：
 
 ```text
-Belief:
-  这只股票新闻和趋势仍然偏正，stock_belief_score = +0.65。
+Belief signal:
+  这只股票新闻和趋势仍然偏正，LLM 输出强微观利好和正技术偏向。
 
 Desire:
   但我已经盈利 30%，RSI 过热，处置效应和前景理论效用让我想落袋为安。
@@ -57,10 +57,14 @@ Final thought:
 ```text
 1. Belief / Sentiment 层
    输入：K 线、技术指标、新闻、社交舆论、人格提示词
-   输出：stock_belief_score, sentiment_class, macro/micro/technical/attention 分解
+   输出：macro/micro/technical/attention/uncertainty 分解
+
+1b. Belief Scoring 层
+   输入：LLM 分解项 + 技术特征
+   输出：belief_score, sentiment_class
 
 2. Desire / Utility 层
-   输入：stock_belief_score + 账户状态 + 持仓盈亏 + 前景理论效用
+   输入：belief_score + 账户状态 + 持仓盈亏 + 前景理论效用
    输出：buy_desire, sell_desire, hold_desire, disposition_pressure
 
 3. Action 层
@@ -151,8 +155,6 @@ gain_flag / loss_flag
   "attention_bias": 0.2,
   "uncertainty": 0.3,
   "retail_emotion": "fomo",
-  "stock_belief_score": 0.65,
-  "sentiment_class": 1,
   "belief_reason": "..."
 }
 ```
@@ -167,9 +169,9 @@ gain_flag / loss_flag
 - `attention_bias`：社交热度、成交异动、注意力引发的偏差。
 - `uncertainty`：证据不确定性。
 - `retail_emotion`：散户情绪标签。
-- `stock_belief_score`：对当前股票本身的连续认知，范围 `[-1, 1]`。
-- `sentiment_class`：与 `stock_belief_score` 同方向的三分类，`-1/0/1`。
 - `belief_reason`：一句第一人称股票认知，不解释账户交易行为。
+
+注意：最终 `belief_score` 和 `sentiment_class` 不由 LLM 直接输出，而由 `belief_scoring.py` 根据上述分解项计算。这样可以避免 LLM 随意给连续小数。
 
 ---
 
@@ -205,14 +207,14 @@ gain_flag / loss_flag
 社交热度高但无个股新闻：
   attention_bias = 0.55
   micro_strength = 0.2
-  stock_belief_score 接近中性
+  belief_score 接近中性
 
 强利好 + 突破趋势：
   micro_direction = 1
   micro_strength = 0.8
   technical_direction = 1
   technical_strength = 0.75
-  stock_belief_score 较高
+  belief_score 较高
 ```
 
 Few-Shot 的核心作用就是给这些连续分数建立锚点。
@@ -299,11 +301,11 @@ belief_score
 sentiment_class
 ```
 
-我们内部建议保留两个层次：
+当前建议保留两个层次：
 
 ```text
-stock_belief_score:
-  Belief 层对股票本身的认知。
+belief_score:
+  Belief Scoring 层对股票本身的连续认知，由 belief_scoring.py 计算。
 
 official_belief_score:
   Action 层给官方接口的最终行为信念分，最好与 action 同方向。
@@ -319,7 +321,7 @@ official_belief_score:
 所以后续 Action 层可以：
 
 ```text
-stock_belief_score = +0.65
+belief_score = +0.65
 desire_sell = high because pnl_return = +30%
 action = sell
 official_belief_score = negative
@@ -341,7 +343,7 @@ desire_utility.py
 它接收：
 
 ```text
-stock_belief_score
+belief_score
 sentiment_class
 account_features
 personality
@@ -395,10 +397,8 @@ normalize_cognition(data)
 会做：
 
 ```text
-stock_belief_score 裁剪到 [-1, 1]
 macro_strength / micro_strength / technical_strength / uncertainty 裁剪到 [0, 1]
 technical_bias / attention_bias 裁剪到 [-1, 1]
-sentiment_class 限制为 -1 / 0 / 1
 缺字段时回退中性值
 ```
 
@@ -408,7 +408,7 @@ sentiment_class 限制为 -1 / 0 / 1
 
 1. 优化连续分数标尺，让每个分数区间都有更多例子。
 2. 按人格做专属 Few-Shot，强化“同样事实，不同解读强度”。
-3. 把 `stock_belief_score` 的计算拆成可解释公式：
+3. 继续优化 `belief_score` 的可解释公式：
 
 ```text
 text_component
@@ -422,4 +422,3 @@ personality_tilt
 5. 在 Desire 层接入账户状态和前景理论效用函数。
 6. 在 Action 层调节 DE 分布。
 7. 在 Final Thought 层明确写出“股票看法”和“最终交易原因”的转折。
-
